@@ -530,6 +530,12 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                 } else {
                                     device.name.clone()
                                 };
+                                #[cfg(target_os = "linux")]
+                                let name = if app.backend.soloist().matches_device(&device.name) {
+                                    format!("{name} · {}", gettext(locale, "Lossless"))
+                                } else {
+                                    name
+                                };
                                 let (rect, response) = ui.allocate_exact_size(
                                     vec2(ui.available_width(), 52.0),
                                     Sense::click(),

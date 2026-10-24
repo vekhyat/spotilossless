@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Spotifast\n"
 "Report-Msgid-Bugs-To: https://github.com/crmne/spotifast/issues/new?"
 "template=translation.yml\n"
-"POT-Creation-Date: 2026-10-22 02:26+0200\n"
+"POT-Creation-Date: 2026-10-24 16:31+0530\n"
 "PO-Revision-Date: 2026-09-09 13:30+0000\n"
 "Last-Translator: Spotifast contributors\n"
 "Language-Team: Traditional Chinese\n"
@@ -28,12 +28,12 @@ msgstr "暫停 {name}"
 msgid "Play {name}"
 msgstr "播放 {name}"
 
-#: src/ui/sidebar.rs:302 src/app.rs:3330 src/app.rs:21894
+#: src/ui/sidebar.rs:302 src/app.rs:3330 src/app.rs:21918
 #: src/ui/collection.rs:2119 src/ui/collection.rs:2336
 msgid "Playlist"
 msgstr "播放清單"
 
-#: src/ui/sidebar.rs:312 src/ui/friends.rs:286 src/app.rs:3304 src/app.rs:21899
+#: src/ui/sidebar.rs:312 src/ui/friends.rs:286 src/app.rs:3304 src/app.rs:21923
 #: src/ui/collection.rs:2329 src/ui/home.rs:93 src/ui/keys.rs:264
 #: src/ui/winamp/playlist.rs:653
 msgid "Liked Songs"
@@ -804,7 +804,7 @@ msgid "Queue cleared"
 msgstr "已清除待播清單"
 
 #. Translators: Keep {date} unchanged. It is a date in YYYY-MM-DD form.
-#: src/app.rs:6063 src/app.rs:21884
+#: src/app.rs:6063 src/app.rs:21908
 #, rust-format
 msgid "Queue {date}"
 msgstr "待播清單 {date}"
@@ -1149,7 +1149,7 @@ msgstr "無法上傳封面：{error}。請再試一次。"
 
 #. Translators: Keep {track} unchanged. It is the name of the song,
 #. playlist, album, or artist the radio is based on, not translated.
-#: src/app.rs:21904 src/app/radio.rs:38
+#: src/app.rs:21928 src/app/radio.rs:38
 #, rust-format
 msgid "{track} Radio"
 msgstr "{track} 電台"
@@ -2333,15 +2333,19 @@ msgstr "正在尋找音訊輸出…"
 msgid "No devices found. Open Spotify on another device, then refresh."
 msgstr "找不到裝置。請在其他裝置上開啟 Spotify，然後重新整理。"
 
-#: src/ui/devices.rs:563
+#: src/ui/devices.rs:535
+msgid "Lossless"
+msgstr "無損"
+
+#: src/ui/devices.rs:569
 msgid "Listening on this device"
 msgstr "正在這台裝置上收聽"
 
-#: src/ui/devices.rs:565
+#: src/ui/devices.rs:571
 msgid "Restricted"
 msgstr "受限制"
 
-#: src/ui/devices.rs:567
+#: src/ui/devices.rs:573
 msgid "Play here"
 msgstr "在這裡播放"
 
@@ -2818,7 +2822,9 @@ msgid ""
 "Spotify refused the key that unlocks the audio. Spotifast can't fix that, "
 "but it sometimes clears up on its own. You can still play on your phone or "
 "another Spotify device."
-msgstr "Spotify 拒絕提供解鎖音訊的金鑰。Spotifast 沒辦法解決，但有時過一陣子會自己恢復。你仍然可以在手機或其他 Spotify 裝置上播放。"
+msgstr ""
+"Spotify 拒絕提供解鎖音訊的金鑰。Spotifast 沒辦法解決，但有時過一陣子會自己恢"
+"復。你仍然可以在手機或其他 Spotify 裝置上播放。"
 
 #: src/ui/mod.rs:406
 msgid "Play on another device"

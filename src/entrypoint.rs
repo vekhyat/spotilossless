@@ -101,6 +101,12 @@ struct Cli {
 /// and hands on keyboards.
 #[derive(Debug, clap::Subcommand)]
 enum Control {
+    /// Configure the optional Linux Soloist receiver (key read from stdin).
+    #[cfg(target_os = "linux")]
+    Soloist {
+        #[command(subcommand)]
+        command: SoloistCommand,
+    },
     /// Toggle play/pause
     PlayPause,
     /// Start playback if paused
@@ -175,6 +181,55 @@ enum Control {
     ReloadThemes,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Debug, clap::Subcommand)]
+enum SoloistCommand {
+    /// Save receiver paths and store the API key in Secret Service.
+    Setup {
+        #[arg(long)]
+        binary: std::path::PathBuf,
+        #[arg(long)]
+        data_dir: std::path::PathBuf,
+        #[arg(long, default_value = "Spotilossless Soloist")]
+        name: String,
+    },
+}
+
+#[cfg(target_os = "linux")]
+fn run_soloist(command: SoloistCommand) -> i32 {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        eprintln!(
+            "Read the Soloist key without echo, then pipe it to stdin. See the Linux Soloist guide."
+        );
+        return 1;
+    }
+    let SoloistCommand::Setup {
+        binary,
+        data_dir,
+        name,
+    } = command;
+    let config = spotifast::soloist::Config {
+        binary,
+        data_dir,
+        device_name: name,
+    };
+    match spotifast::soloist::setup(
+        &paths::AppDirs::installed(),
+        config,
+        std::io::stdin().lock(),
+    ) {
+        Ok(()) => {
+            println!("Soloist configured. Restart Spotifast, then select it in the device menu.");
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum SearchKind {
     Track,
@@ -207,6 +262,8 @@ fn run_control(control: Control) -> i32 {
         Control::NowPlaying { raw: true } | Control::Devices { raw: true }
     );
     let verb = match control {
+        #[cfg(target_os = "linux")]
+        Control::Soloist { command } => return run_soloist(command),
         Control::PlayPause => "playpause".to_owned(),
         Control::Play => "play".to_owned(),
         Control::Pause => "pause".to_owned(),
@@ -1599,6 +1656,38 @@ fn app_icon() -> egui::IconData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn soloist_setup_reads_secrets_only_from_stdin() {
+        let cli = Cli::try_parse_from([
+            "spotifast",
+            "soloist",
+            "setup",
+            "--binary",
+            "/opt/soloist",
+            "--data-dir",
+            "/home/listener/soloist",
+        ])
+        .unwrap();
+        assert!(matches!(cli.control, Some(Control::Soloist {
+            command: SoloistCommand::Setup { name, .. }
+        }) if name == "Spotilossless Soloist"));
+        assert!(
+            Cli::try_parse_from([
+                "spotifast",
+                "soloist",
+                "setup",
+                "--binary",
+                "/opt/soloist",
+                "--data-dir",
+                "/home/listener/soloist",
+                "--key",
+                "dummy-key",
+            ])
+            .is_err()
+        );
+    }
 
     /// The login entry's `--start-hidden` starts in the tray, unless the
     /// launch has something to show.

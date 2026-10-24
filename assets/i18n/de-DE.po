@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Spotifast\n"
 "Report-Msgid-Bugs-To: https://github.com/crmne/spotifast/issues/new?"
 "template=translation.yml\n"
-"POT-Creation-Date: 2026-10-22 02:26+0200\n"
+"POT-Creation-Date: 2026-10-24 16:31+0530\n"
 "PO-Revision-Date: 2026-09-09 13:30+0000\n"
 "Last-Translator: Spotifast contributors\n"
 "Language-Team: German\n"
@@ -28,12 +28,12 @@ msgstr "{name} pausieren"
 msgid "Play {name}"
 msgstr "{name} abspielen"
 
-#: src/ui/sidebar.rs:302 src/app.rs:3330 src/app.rs:21894
+#: src/ui/sidebar.rs:302 src/app.rs:3330 src/app.rs:21918
 #: src/ui/collection.rs:2119 src/ui/collection.rs:2336
 msgid "Playlist"
 msgstr "Playlist"
 
-#: src/ui/sidebar.rs:312 src/ui/friends.rs:286 src/app.rs:3304 src/app.rs:21899
+#: src/ui/sidebar.rs:312 src/ui/friends.rs:286 src/app.rs:3304 src/app.rs:21923
 #: src/ui/collection.rs:2329 src/ui/home.rs:93 src/ui/keys.rs:264
 #: src/ui/winamp/playlist.rs:653
 msgid "Liked Songs"
@@ -819,7 +819,7 @@ msgid "Queue cleared"
 msgstr "Warteschlange geleert"
 
 #. Translators: Keep {date} unchanged. It is a date in YYYY-MM-DD form.
-#: src/app.rs:6063 src/app.rs:21884
+#: src/app.rs:6063 src/app.rs:21908
 #, rust-format
 msgid "Queue {date}"
 msgstr "Warteschlange {date}"
@@ -1184,7 +1184,7 @@ msgstr ""
 
 #. Translators: Keep {track} unchanged. It is the name of the song,
 #. playlist, album, or artist the radio is based on, not translated.
-#: src/app.rs:21904 src/app/radio.rs:38
+#: src/app.rs:21928 src/app/radio.rs:38
 #, rust-format
 msgid "{track} Radio"
 msgstr "Radio zu {track}"
@@ -2441,15 +2441,19 @@ msgstr ""
 "Keine Geräte gefunden. Öffne Spotify auf einem anderen Gerät und "
 "aktualisiere dann."
 
-#: src/ui/devices.rs:563
+#: src/ui/devices.rs:535
+msgid "Lossless"
+msgstr "Verlustfrei"
+
+#: src/ui/devices.rs:569
 msgid "Listening on this device"
 msgstr "Wiedergabe auf diesem Gerät"
 
-#: src/ui/devices.rs:565
+#: src/ui/devices.rs:571
 msgid "Restricted"
 msgstr "Eingeschränkt"
 
-#: src/ui/devices.rs:567
+#: src/ui/devices.rs:573
 msgid "Play here"
 msgstr "Hier abspielen"
 
@@ -2937,7 +2941,10 @@ msgid ""
 "Spotify refused the key that unlocks the audio. Spotifast can't fix that, "
 "but it sometimes clears up on its own. You can still play on your phone or "
 "another Spotify device."
-msgstr "Spotify hat den Schlüssel verweigert, der den Ton entsperrt. Spotifast kann daran nichts ändern, aber manchmal löst es sich von selbst. Auf deinem Handy oder einem anderen Spotify-Gerät kannst du trotzdem abspielen."
+msgstr ""
+"Spotify hat den Schlüssel verweigert, der den Ton entsperrt. Spotifast kann "
+"daran nichts ändern, aber manchmal löst es sich von selbst. Auf deinem Handy "
+"oder einem anderen Spotify-Gerät kannst du trotzdem abspielen."
 
 #: src/ui/mod.rs:406
 msgid "Play on another device"

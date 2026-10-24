@@ -13295,6 +13295,30 @@ fn cover_error(locale: Locale, error: &crate::api::client::ApiError) -> String {
     }
 }
 
+#[cfg(target_os = "linux")]
+impl App {
+    /// Whether the chosen Connect output is Soloist, including an optimistic
+    /// transfer that Spotify has not yet confirmed. This does not report the
+    /// stream's codec or bit depth. The PID is `self.backend.soloist().pid()`.
+    pub fn soloist_active(&self) -> bool {
+        let Target::Remote(id) = self.target() else {
+            return false;
+        };
+        let remote = self
+            .remote_fresh()
+            .and_then(|remote| remote.state.device.as_ref());
+        let device = match id.as_deref() {
+            Some(id) => self
+                .devices
+                .iter()
+                .find(|device| device.id.as_deref() == Some(id))
+                .or_else(|| remote.filter(|device| device.id.as_deref() == Some(id))),
+            None => remote.filter(|device| device.is_active),
+        };
+        device.is_some_and(|device| self.backend.soloist().matches_device(&device.name))
+    }
+}
+
 mod radio;
 
 #[cfg(test)]

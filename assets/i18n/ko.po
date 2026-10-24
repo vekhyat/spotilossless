@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Spotifast\n"
 "Report-Msgid-Bugs-To: https://github.com/crmne/spotifast/issues/new?"
 "template=translation.yml\n"
-"POT-Creation-Date: 2026-10-22 02:26+0200\n"
+"POT-Creation-Date: 2026-10-24 16:31+0530\n"
 "PO-Revision-Date: 2026-10-15 12:00+0900\n"
 "Last-Translator: Spotifast contributors\n"
 "Language-Team: Korean\n"
@@ -28,12 +28,12 @@ msgstr "{name} 일시정지"
 msgid "Play {name}"
 msgstr "{name} 재생"
 
-#: src/ui/sidebar.rs:302 src/app.rs:3330 src/app.rs:21894
+#: src/ui/sidebar.rs:302 src/app.rs:3330 src/app.rs:21918
 #: src/ui/collection.rs:2119 src/ui/collection.rs:2336
 msgid "Playlist"
 msgstr "플레이리스트"
 
-#: src/ui/sidebar.rs:312 src/ui/friends.rs:286 src/app.rs:3304 src/app.rs:21899
+#: src/ui/sidebar.rs:312 src/ui/friends.rs:286 src/app.rs:3304 src/app.rs:21923
 #: src/ui/collection.rs:2329 src/ui/home.rs:93 src/ui/keys.rs:264
 #: src/ui/winamp/playlist.rs:653
 msgid "Liked Songs"
@@ -809,7 +809,7 @@ msgid "Queue cleared"
 msgstr "재생목록을 지웠습니다"
 
 #. Translators: Keep {date} unchanged. It is a date in YYYY-MM-DD form.
-#: src/app.rs:6063 src/app.rs:21884
+#: src/app.rs:6063 src/app.rs:21908
 #, rust-format
 msgid "Queue {date}"
 msgstr "재생목록 {date}"
@@ -1164,7 +1164,7 @@ msgstr "커버를 업로드하지 못했습니다: {error}. 다시 시도하세�
 
 #. Translators: Keep {track} unchanged. It is the name of the song,
 #. playlist, album, or artist the radio is based on, not translated.
-#: src/app.rs:21904 src/app/radio.rs:38
+#: src/app.rs:21928 src/app/radio.rs:38
 #, rust-format
 msgid "{track} Radio"
 msgstr "{track} 라디오"
@@ -2375,15 +2375,19 @@ msgid "No devices found. Open Spotify on another device, then refresh."
 msgstr ""
 "기기를 찾을 수 없습니다. 다른 기기에서 Spotify를 연 다음 새로고침하세요."
 
-#: src/ui/devices.rs:563
+#: src/ui/devices.rs:535
+msgid "Lossless"
+msgstr "무손실"
+
+#: src/ui/devices.rs:569
 msgid "Listening on this device"
 msgstr "이 기기에서 듣는 중"
 
-#: src/ui/devices.rs:565
+#: src/ui/devices.rs:571
 msgid "Restricted"
 msgstr "제한됨"
 
-#: src/ui/devices.rs:567
+#: src/ui/devices.rs:573
 msgid "Play here"
 msgstr "여기에서 재생"
 
@@ -2866,7 +2870,10 @@ msgid ""
 "Spotify refused the key that unlocks the audio. Spotifast can't fix that, "
 "but it sometimes clears up on its own. You can still play on your phone or "
 "another Spotify device."
-msgstr "Spotify가 오디오 잠금을 해제하는 키를 거부했습니다. Spotifast에서 고칠 수는 없지만, 저절로 해결되기도 합니다. 휴대폰이나 다른 Spotify 기기에서는 계속 재생할 수 있습니다."
+msgstr ""
+"Spotify가 오디오 잠금을 해제하는 키를 거부했습니다. Spotifast에서 고칠 수는 "
+"없지만, 저절로 해결되기도 합니다. 휴대폰이나 다른 Spotify 기기에서는 계속 재"
+"생할 수 있습니다."
 
 #: src/ui/mod.rs:406
 msgid "Play on another device"

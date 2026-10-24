@@ -1124,6 +1124,8 @@ pub use fastframe_shell::Waker;
 
 /// The interface's handle to the runtime.
 pub struct Backend {
+    #[cfg(target_os = "linux")]
+    soloist: crate::soloist::Supervisor,
     commands: mpsc::UnboundedSender<Command>,
     events: std::sync::mpsc::Receiver<Event>,
     art: ArtLoader,
@@ -1195,6 +1197,21 @@ impl Backend {
         let worker_activity = Arc::clone(&activity);
         let worker_art = art.clone();
         let worker_commands = command_tx.clone();
+        #[cfg(target_os = "linux")]
+        let soloist = {
+            let events = event_tx.clone();
+            let error_waker = waker.clone();
+            let change_waker = waker.clone();
+            crate::soloist::Supervisor::start(
+                dirs.clone(),
+                restore_sign_in && !cfg!(test),
+                move |message| {
+                    let _ = events.send(Event::Error(message));
+                    error_waker.wake();
+                },
+                move || change_waker.wake(),
+            )
+        };
         let thread = std::thread::Builder::new()
             .name("spotifast-backend".to_string())
             .spawn(move || {
@@ -1221,6 +1238,8 @@ impl Backend {
             .expect("unable to start the backend thread");
 
         Self {
+            #[cfg(target_os = "linux")]
+            soloist,
             commands: command_tx,
             events: event_rx,
             art,
@@ -1598,7 +1617,15 @@ impl Backend {
         &self.art
     }
 
+    /// Live Linux receiver identity for the UI and the PipeWire tap.
+    #[cfg(target_os = "linux")]
+    pub fn soloist(&self) -> &crate::soloist::Handle {
+        &self.soloist.handle
+    }
+
     pub fn shutdown(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.soloist.shutdown();
         self.send(Command::Shutdown);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
