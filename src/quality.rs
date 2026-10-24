@@ -70,8 +70,16 @@ pub struct Reported {
     pub target: Option<Level>,
 }
 
-/// The latest report, shared between the session's task and the interface.
-pub type Shared = Arc<Mutex<Option<Reported>>>;
+/// What the session last heard: the active device's report, and which
+/// devices say they can play lossless.
+#[derive(Debug, Default)]
+pub struct State {
+    reported: Option<Reported>,
+    lossless: std::collections::BTreeSet<String>,
+}
+
+/// Shared between the session's task and the interface.
+pub type Shared = Arc<Mutex<State>>;
 
 /// The report from this process's playback session. One session runs at a
 /// time, and each new one starts watching here.
@@ -99,7 +107,7 @@ pub fn watch(session: &librespot_core::Session, shared: &Shared) {
             return;
         }
     };
-    *shared.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    *shared.lock().unwrap_or_else(|p| p.into_inner()) = State::default();
     let shared = Arc::clone(shared);
     tokio::spawn(async move {
         while let Some(update) = updates.next().await {
@@ -129,20 +137,56 @@ pub fn from_cluster(cluster: &Cluster) -> Option<Reported> {
     })
 }
 
-/// Stores the report from a cluster update. An update without one clears
-/// it, so an old device's report never stays on a new one.
+/// The devices in a cluster that say they can play lossless: Spotify marks
+/// them as fully supporting HiFi, or as supporting a lossless quality.
+pub fn lossless_devices(cluster: &Cluster) -> std::collections::BTreeSet<String> {
+    use librespot_protocol::media::AudioQuality;
+    cluster
+        .device
+        .iter()
+        .filter(|(_, device)| {
+            let capabilities = &device.capabilities;
+            capabilities.supports_hifi.fully_supported
+                || matches!(
+                    capabilities.supported_audio_quality.enum_value(),
+                    Ok(AudioQuality::HIFI | AudioQuality::HIFI_24)
+                )
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// Stores what a cluster update says. An update without a report clears it,
+/// so an old device's report never stays on a new one. An update without
+/// devices keeps the ones known.
 pub fn note(shared: &Shared, cluster: &Cluster) {
     let reported = from_cluster(cluster);
-    let mut current = shared.lock().unwrap_or_else(|p| p.into_inner());
-    if *current != reported {
+    let mut state = shared.lock().unwrap_or_else(|p| p.into_inner());
+    if state.reported != reported {
         log::info!(
             "playback quality reported: {:?}",
             reported
                 .as_ref()
                 .map(|reported| (reported.level, reported.target))
         );
-        *current = reported;
+        state.reported = reported;
     }
+    if !cluster.device.is_empty() {
+        let lossless = lossless_devices(cluster);
+        if state.lossless != lossless {
+            log::info!("devices that can play lossless: {}", lossless.len());
+            state.lossless = lossless;
+        }
+    }
+}
+
+/// Whether `device_id` said it can play lossless.
+pub fn supports_lossless(shared: &Shared, device_id: &str) -> bool {
+    shared
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .lossless
+        .contains(device_id)
 }
 
 /// The report for `device_id`, if that device made the latest one.
@@ -150,6 +194,7 @@ pub fn for_device(shared: &Shared, device_id: &str) -> Option<Reported> {
     shared
         .lock()
         .unwrap_or_else(|p| p.into_inner())
+        .reported
         .clone()
         .filter(|reported| reported.device_id == device_id)
 }
@@ -214,6 +259,47 @@ mod tests {
             None
         );
         assert_eq!(from_cluster(&Cluster::default()), None);
+    }
+
+    #[test]
+    fn devices_that_report_lossless_support_are_known() {
+        use librespot_protocol::connect::{Capabilities, CapabilitySupportDetails, DeviceInfo};
+        use librespot_protocol::media::AudioQuality;
+
+        let device = |hifi: bool, quality: AudioQuality| DeviceInfo {
+            capabilities: MessageField::some(Capabilities {
+                supports_hifi: MessageField::some(CapabilitySupportDetails {
+                    fully_supported: hifi,
+                    ..Default::default()
+                }),
+                supported_audio_quality: quality.into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut cluster = Cluster::default();
+        cluster
+            .device
+            .insert("soloist".into(), device(true, AudioQuality::DEFAULT));
+        cluster
+            .device
+            .insert("speaker".into(), device(false, AudioQuality::HIFI_24));
+        cluster
+            .device
+            .insert("spotifast".into(), device(false, AudioQuality::VERY_HIGH));
+        cluster.device.insert("phone".into(), DeviceInfo::default());
+        assert_eq!(
+            lossless_devices(&cluster).into_iter().collect::<Vec<_>>(),
+            ["soloist", "speaker"]
+        );
+
+        let shared = Shared::default();
+        note(&shared, &cluster);
+        assert!(supports_lossless(&shared, "soloist"));
+        assert!(!supports_lossless(&shared, "spotifast"));
+        // An update that lists no devices keeps the ones known.
+        note(&shared, &Cluster::default());
+        assert!(supports_lossless(&shared, "soloist"));
     }
 
     #[test]

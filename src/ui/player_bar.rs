@@ -2,7 +2,7 @@
 
 use egui::{Align, Color32, Frame, Layout, Margin, Rect, Sense, UiBuilder, Vec2, pos2, vec2};
 
-use crate::app::{App, NowPlaying};
+use crate::app::{App, LosslessLine, NowPlaying};
 use crate::i18n::gettext;
 use crate::model::{Action, DragTrack, Page};
 use crate::player::RepeatMode;
@@ -519,10 +519,8 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
     };
     // A lossless report from the device that plays gets a third line, as in
     // Spotify's own player bar.
-    let quality = app
-        .reported_quality()
-        .filter(|reported| reported.level.is_lossless());
-    let info_rect = if quality.is_some() {
+    let lossless = app.lossless_line();
+    let info_rect = if lossless.is_some() {
         Rect::from_min_size(pos2(text_left, cy - 25.0), vec2(text_width, 50.0))
     } else {
         Rect::from_min_size(pos2(text_left, cy - 18.0), vec2(text_width, 36.0))
@@ -576,12 +574,40 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
             }
         }
     });
-    if let Some(level) = quality.and_then(|reported| reported.level.label(app.locale)) {
-        theme::text(&mut text_ui, &level, theme::medium(11.0), palette.accent).on_hover_text(
-            // Translators: {level} is an audio quality, such as "Lossless 24-bit".
-            gettext(app.locale, "Spotify reports {level} on this device")
-                .replace("{level}", &level),
-        );
+    match lossless {
+        Some(LosslessLine::Playing(level)) => {
+            theme::text(&mut text_ui, &level, theme::medium(11.0), palette.accent).on_hover_text(
+                // Translators: {level} is an audio quality, such as "Lossless 24-bit".
+                gettext(app.locale, "Spotify reports {level} on this device")
+                    .replace("{level}", &level),
+            );
+        }
+        Some(LosslessLine::TurnedOff) => {
+            theme::text(
+                &mut text_ui,
+                gettext(app.locale, "Lossless is off for this device"),
+                theme::regular(11.0),
+                palette.dim,
+            )
+            .on_hover_text(gettext(
+                app.locale,
+                "Set its streaming quality to Lossless in Spotify's app. Spotify remembers it.",
+            ));
+        }
+        Some(LosslessLine::Offer { device_id, name }) => {
+            let offer = theme::link(
+                &mut text_ui,
+                gettext(app.locale, "Play in lossless"),
+                theme::medium(11.0),
+                palette.secondary,
+            )
+            // Translators: {device} is a Spotify Connect device's name.
+            .on_hover_text(gettext(app.locale, "Play on {device}").replace("{device}", &name));
+            if offer.clicked() {
+                app.actions.push(Action::Transfer(device_id));
+            }
+        }
+        None => {}
     }
     if responses
         .iter()

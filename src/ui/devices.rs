@@ -530,15 +530,6 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                 } else {
                                     device.name.clone()
                                 };
-                                // The quality the device itself reports, never a guess from its name.
-                                let name = match active
-                                    .then(|| app.reported_quality())
-                                    .flatten()
-                                    .and_then(|reported| reported.level.label(locale))
-                                {
-                                    Some(level) => format!("{name} · {level}"),
-                                    None => name,
-                                };
                                 let (rect, response) = ui.allocate_exact_size(
                                     vec2(ui.available_width(), 52.0),
                                     Sense::click(),
@@ -568,8 +559,22 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                     theme::medium(14.0),
                                     color,
                                 );
+                                let id = device.id.as_deref().unwrap_or_default();
                                 let status = if active {
-                                    gettext(locale, "Listening on this device").into_owned()
+                                    // The quality the device itself reports, as Spotify's own picker shows it.
+                                    app.reported_quality()
+                                        .filter(|reported| reported.device_id == id)
+                                        .and_then(|reported| reported.level.label(locale))
+                                        .unwrap_or_else(|| {
+                                            gettext(locale, "Listening on this device").into_owned()
+                                        })
+                                } else if !is_local
+                                    && crate::quality::supports_lossless(
+                                        crate::quality::current(),
+                                        id,
+                                    )
+                                {
+                                    gettext(locale, "Lossless available").into_owned()
                                 } else if device.is_restricted {
                                     gettext(locale, "Restricted").into_owned()
                                 } else if is_local {

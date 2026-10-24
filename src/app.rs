@@ -167,6 +167,18 @@ struct QueueShufflePending {
     at: Instant,
 }
 
+/// The player bar's line about lossless playback; see [`App::lossless_line`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LosslessLine {
+    /// The device that plays reports this lossless level.
+    Playing(String),
+    /// The device can play lossless but reports a lower quality: its
+    /// streaming quality is set below Lossless.
+    TurnedOff,
+    /// Another device can play lossless.
+    Offer { device_id: String, name: String },
+}
+
 /// The playing item as the interface sees it, whichever device plays it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NowPlaying {
@@ -13609,14 +13621,12 @@ impl App {
 }
 
 impl App {
-    /// The quality the chosen remote device reports for what it plays, from
-    /// Spotify's Connect cluster. `None` on this computer, before a report,
-    /// and when the report belongs to another device.
-    pub fn reported_quality(&self) -> Option<crate::quality::Reported> {
+    /// The chosen remote device's id: the one picked, or else the active one.
+    fn remote_device_id(&self) -> Option<String> {
         let Target::Remote(id) = self.target() else {
             return None;
         };
-        let id = id.or_else(|| {
+        id.or_else(|| {
             self.remote_fresh()?
                 .state
                 .device
@@ -13624,8 +13634,41 @@ impl App {
                 .filter(|device| device.is_active)?
                 .id
                 .clone()
-        })?;
-        crate::quality::for_device(crate::quality::current(), &id)
+        })
+    }
+
+    /// The quality the chosen remote device reports for what it plays, from
+    /// Spotify's Connect cluster. `None` on this computer, before a report,
+    /// and when the report belongs to another device.
+    pub fn reported_quality(&self) -> Option<crate::quality::Reported> {
+        crate::quality::for_device(crate::quality::current(), &self.remote_device_id()?)
+    }
+
+    /// What the player bar says about lossless under the artist, if anything.
+    /// Only what devices report counts: a device playing lossless, a device
+    /// that can play lossless but reports less, or one to switch to.
+    pub fn lossless_line(&self) -> Option<LosslessLine> {
+        use crate::quality::{current, supports_lossless};
+        let active = self.remote_device_id();
+        if let Some(id) = &active {
+            if let Some(level) = self
+                .reported_quality()
+                .and_then(|reported| reported.level.label(self.locale))
+            {
+                return Some(LosslessLine::Playing(level));
+            }
+            if supports_lossless(current(), id) {
+                return self.reported_quality().map(|_| LosslessLine::TurnedOff);
+            }
+        }
+        self.devices
+            .iter()
+            .filter(|device| device.id.is_some() && device.id != active)
+            .find(|device| supports_lossless(current(), device.id.as_deref().unwrap_or_default()))
+            .map(|device| LosslessLine::Offer {
+                device_id: device.id.clone().unwrap_or_default(),
+                name: device.name.clone(),
+            })
     }
 
     /// Whether the visualisers have sound to show: the song playing on this
@@ -20242,6 +20285,44 @@ mod tests {
                 ..now
             })));
         }
+    }
+
+    /// Playing on this computer, the player bar offers a device that says
+    /// it can play lossless, and choosing it transfers there.
+    #[test]
+    fn the_player_bar_offers_a_device_that_reports_lossless_support() {
+        use librespot_protocol::connect::{Capabilities, CapabilitySupportDetails, DeviceInfo};
+
+        let mut app = test_app("lossless-offer");
+        app.devices = vec![Device {
+            id: Some("lossless-offer-receiver".into()),
+            name: "Spotilossless Soloist".into(),
+            ..Default::default()
+        }];
+        assert_eq!(app.lossless_line(), None);
+
+        let mut cluster = librespot_protocol::connect::Cluster::default();
+        cluster.device.insert(
+            "lossless-offer-receiver".into(),
+            DeviceInfo {
+                capabilities: protobuf::MessageField::some(Capabilities {
+                    supports_hifi: protobuf::MessageField::some(CapabilitySupportDetails {
+                        fully_supported: true,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        crate::quality::note(crate::quality::current(), &cluster);
+        assert_eq!(
+            app.lossless_line(),
+            Some(LosslessLine::Offer {
+                device_id: "lossless-offer-receiver".into(),
+                name: "Spotilossless Soloist".into(),
+            })
+        );
     }
 
     fn test_app(name: &str) -> App {

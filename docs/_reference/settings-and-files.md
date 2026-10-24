@@ -693,9 +693,19 @@ printf '%s\n' "$soloist_key" | spotifast soloist setup \
 unset soloist_key
 ```
 
-Restart Spotifast. Choose **Spotilossless Soloist · Lossless** in the device
-menu. The label identifies the configured receiver; it does not verify the
-current stream's quality. Use a unique device name. Playback controls use the
+Restart Spotifast. While a song plays on this computer, **Play in lossless**
+appears under the artist when a device reports that it can play lossless;
+choose it to move playback there, keeping the song, position and queue. The
+device menu shows **Lossless available** on such a device. Once it plays,
+the player bar and the device menu show the quality the device reports to
+Spotify, **Lossless** or **Lossless 24-bit**, the same report Spotify's own
+apps show. Spotifast reads it from the Connect updates its session receives,
+so it appears after the first change in playback (play, pause, skip or
+volume). If the device can play lossless but reports less, the player bar
+says **Lossless is off for this device**: set the device's streaming quality
+to Lossless once in Spotify's app, which remembers it. Spotify offers no
+supported way for another app to change that setting. Use a unique device
+name. Playback controls use the
 existing Spotify Connect connection and account requirements. Soloist commands,
 transfers, queue additions and shuffle-play use the session's Connect route,
 even when Spotify does not flag the receiver as restricted. The default exact
