@@ -58,9 +58,8 @@ https://github.com/user-attachments/assets/a5f669ce-b3b7-4f8e-9933-976a78876c7e
 | **Winamp mini player** | Use classic skins with an equalizer, playlist, and animated sound displays. |
 | **MilkDrop** | Watch music-reactive visuals in a separate window or full screen. See platform availability below. |
 
-Linux developers working on this personal fork can use the optional
-[Soloist visualiser capture module](docs/_reference/soloist-tap.md). It requires
-a separately installed receiver and is not connected to the interface yet.
+While Soloist plays, the visualisers follow its PipeWire output; see
+[Soloist visualiser capture](docs/_reference/soloist-tap.md).
 
 ## Install
 

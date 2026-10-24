@@ -5,8 +5,13 @@ nav_exclude: true
 
 This personal fork provides a Linux-only `soloist_tap` module for visualisers
 when an independently installed Soloist receiver plays through PipeWire. The
-module does not install Soloist, change playback routing, or connect itself to
-the device menu. It needs `pw-dump` and `pw-record` on `PATH`.
+module does not install Soloist or change playback routing. It needs `pw-dump`
+and `pw-record` on `PATH`.
+
+The app starts capture while the configured Soloist device is the chosen
+Connect output and Spotifast knows the receiver's PID, and stops it otherwise
+(`App::follow_soloist_tap`). The player bar and mini player visualisers then
+treat Soloist's playback as sound to show and read it with `soloist_tap::LAG`.
 
 The integration owner calls `SoloistTap::start(Arc::clone(&tap), soloist_pid)`,
 which returns `std::io::Result<SoloistTap>`. The handle owns capture while
@@ -32,9 +37,9 @@ The samples reach the same mono buffer and MilkDrop stereo ring as local
 playback. The analyser uses `soloist_tap::LAG` (zero samples) instead of
 `vis::LAG`. Capture already buffers audio. Adding librespot's 200 ms queue
 compensation would delay it again. Actual speaker latency depends on the output
-device and was not measured. MilkDrop currently reads `vis::LAG` through
-`src/milkdrop/child.rs`. Selecting the capture lag for that consumer also belongs
-to the integration.
+device and was not measured. MilkDrop still reads `vis::LAG` in its own
+process (`src/milkdrop/child.rs`), so while Soloist plays its picture runs about
+200 ms behind the sound.
 
 Capturing the stream's normal output ports includes stream volume. An isolated
 PipeWire test with a 0.25 linear stream gain reduced capture RMS from about

@@ -779,6 +779,10 @@ pub struct App {
     pub winamp: crate::winamp::WinampState,
     /// The spectrum behind the player bar, when that is chosen.
     pub player_bar_analyser: crate::vis::WideAnalyser,
+    /// Capture of Soloist's output for the visualisers, with the PID it
+    /// follows, while Soloist is the chosen Connect output.
+    #[cfg(target_os = "linux")]
+    soloist_tap: Option<(u32, crate::soloist_tap::SoloistTap)>,
     /// The window's pixels per point when it last drew, so artwork chosen
     /// away from the drawing code fits the display it lands on.
     pub pixels_per_point: f32,
@@ -1303,6 +1307,8 @@ impl App {
             held_update: None,
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
             player_bar_analyser: crate::vis::WideAnalyser::default(),
+            #[cfg(target_os = "linux")]
+            soloist_tap: None,
             pixels_per_point: 1.0,
         };
         app.local.volume = app.settings.volume;
@@ -3700,6 +3706,8 @@ impl App {
 
     fn tick(&mut self, ctx: &egui::Context) {
         self.poll_custom_themes(ctx);
+        #[cfg(target_os = "linux")]
+        self.follow_soloist_tap();
         if let Some(wait) = self.window_focus(ctx.input(|input| {
             // A minimised window is away even where it keeps focus.
             let viewport = input.viewport();
@@ -13317,6 +13325,59 @@ impl App {
         };
         device.is_some_and(|device| self.backend.soloist().matches_device(&device.name))
     }
+
+    /// Captures Soloist's output into the visualisers' tap while it is the
+    /// chosen output, and stops when it is not. A new PID means Soloist
+    /// restarted, so its capture starts again. Starting and stopping never
+    /// wait: the capture runs on its own thread.
+    fn follow_soloist_tap(&mut self) {
+        let wanted = if self.soloist_active() {
+            self.backend.soloist().pid()
+        } else {
+            None
+        };
+        if self.soloist_tap.as_ref().map(|(pid, _)| *pid) == wanted {
+            return;
+        }
+        // Old samples belong to the other source.
+        self.soloist_tap = None;
+        self.winamp.tap.clear();
+        let Some(pid) = wanted else {
+            return;
+        };
+        match crate::soloist_tap::SoloistTap::start(std::sync::Arc::clone(&self.winamp.tap), pid) {
+            Ok(tap) => self.soloist_tap = Some((pid, tap)),
+            Err(error) => log::warn!("Soloist visualiser capture did not start: {error}"),
+        }
+    }
+}
+
+impl App {
+    /// Whether the visualisers have sound to show: the song playing on this
+    /// computer, or Soloist's output while it is captured.
+    pub fn vis_sounding(&self, now: Option<&NowPlaying>) -> bool {
+        now.is_some_and(|now| {
+            (now.playing || now.loading) && (now.local || self.soloist_captured())
+        })
+    }
+
+    /// How far behind the newest captured sample the visualisers look. The
+    /// local sink queues about 200 ms ([`crate::vis::LAG`]); Soloist's
+    /// capture arrives as it plays.
+    pub fn vis_lag(&self) -> usize {
+        if self.soloist_captured() {
+            #[cfg(target_os = "linux")]
+            return crate::soloist_tap::LAG;
+        }
+        crate::vis::LAG
+    }
+
+    fn soloist_captured(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return self.soloist_tap.is_some();
+        #[cfg(not(target_os = "linux"))]
+        false
+    }
 }
 
 mod radio;
@@ -19849,6 +19910,63 @@ mod tests {
         app.check_tray_wait(started + TRAY_WAIT, false);
         assert!(!app.wants_show);
         app.backend.shutdown();
+    }
+
+    /// Remote playback has no sound for the visualisers unless Soloist's
+    /// output is being captured; then they show it without the local sink's
+    /// queue lag.
+    #[test]
+    fn visualisers_follow_soloist_capture_only() {
+        let mut app = test_app("vis-soloist");
+        let now = NowPlaying {
+            local: false,
+            device_name: Some("Spotilossless Soloist".into()),
+            device_kind: None,
+            uri: "spotify:track:t".into(),
+            id: None,
+            title: String::new(),
+            artists: Vec::new(),
+            subtitle: String::new(),
+            album_name: String::new(),
+            album_id: None,
+            show_id: None,
+            art_url: None,
+            art_small: None,
+            duration_ms: 1_000,
+            position_ms: 0,
+            playing: true,
+            loading: false,
+            shuffle: false,
+            repeat: RepeatMode::Off,
+            volume_percent: 50,
+            can_control: true,
+            can_set_volume: true,
+            is_episode: false,
+            resuming: false,
+        };
+        assert!(!app.vis_sounding(Some(&now)));
+        assert_eq!(app.vis_lag(), crate::vis::LAG);
+        assert!(app.vis_sounding(Some(&NowPlaying {
+            local: true,
+            ..now.clone()
+        })));
+
+        #[cfg(target_os = "linux")]
+        {
+            // No such process: the capture finds no node and only retries.
+            let tap = crate::soloist_tap::SoloistTap::start(
+                std::sync::Arc::clone(&app.winamp.tap),
+                u32::MAX,
+            )
+            .unwrap();
+            app.soloist_tap = Some((u32::MAX, tap));
+            assert!(app.vis_sounding(Some(&now)));
+            assert_eq!(app.vis_lag(), crate::soloist_tap::LAG);
+            assert!(!app.vis_sounding(Some(&NowPlaying {
+                playing: false,
+                ..now
+            })));
+        }
     }
 
     fn test_app(name: &str) -> App {

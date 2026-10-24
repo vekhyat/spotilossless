@@ -128,7 +128,7 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
     use crate::settings::PlayerBarVis;
     use crate::vis;
     let mode = app.settings.player_bar_vis;
-    let sounding = now.is_some_and(|now| (now.playing || now.loading) && now.local);
+    let sounding = app.vis_sounding(now);
     let dark = ui.visuals().dark_mode;
     let colours = vis_colours(app.now_playing_palette(), app.palette.accent, dark);
     // Over a light bar the same colour paints more strongly, or white
@@ -142,7 +142,7 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
                 return false;
             }
             let samples = if sounding {
-                app.winamp.tap.window(vis::WIDE_SAMPLES, vis::LAG)
+                app.winamp.tap.window(vis::WIDE_SAMPLES, app.vis_lag())
             } else {
                 Vec::new()
             };
@@ -159,7 +159,10 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
             }
             // Winamp's scope with a column every eight points or so.
             let count = (rect.width() / 8.0).clamp(75.0, 320.0) as usize;
-            let samples = app.winamp.tap.window(count * vis::SCOPE_STEP, vis::LAG);
+            let samples = app
+                .winamp
+                .tap
+                .window(count * vis::SCOPE_STEP, app.vis_lag());
             waveform(
                 &painter,
                 rect,
