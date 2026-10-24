@@ -702,6 +702,12 @@ even when Spotify does not flag the receiver as restricted. The default exact
 name **Spotilossless Soloist** is recognised without `soloist.json`; a configured
 name takes its place after setup. No playback transfer happens automatically.
 
+A transfer uses Spotify's native Connect handoff rather than starting a new
+track list. The current context, queue and position stay visible while it
+settles, and the receiver is told to keep the chosen playing or paused state.
+This relies on the source device publishing a valid Connect context and queue;
+Spotifast cannot recover context pages that librespot has already lost.
+
 `soloist.json` in Spotifast's config directory stores only `binary`, `data_dir`
 and `device_name`. Older files without `device_name` use **Spotilossless
 Soloist**. Writes replace the file atomically. The API key is stored under

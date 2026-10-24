@@ -98,9 +98,18 @@ const QUEUE_ADD_DEBOUNCE: Duration = Duration::from_millis(1500);
 const RECENT_CONTEXTS_KEPT: usize = 60;
 const CONTAINS_BATCH: usize = 40;
 
+#[derive(Clone)]
 pub struct RemoteSnapshot {
     pub state: PlaybackState,
     pub received_at: Instant,
+}
+
+struct RemoteTransfer {
+    device_id: String,
+    at: Instant,
+    previous_device: Option<String>,
+    previous_remote: Option<RemoteSnapshot>,
+    confirmed: bool,
 }
 
 /// A context shown as playing before Spotify confirms it.
@@ -415,6 +424,7 @@ pub struct App {
     pub local_device_id: Option<String>,
     /// Ignore the previous local song until a Connect transfer reports its track.
     local_transfer_sequence: Option<u64>,
+    remote_transfer: Option<RemoteTransfer>,
     /// Local playback is authorized and the engine is connected.
     pub local_ready: bool,
     pub local_playback: LocalPlayback,
@@ -1094,6 +1104,7 @@ impl App {
             user: None,
             local_device_id: None,
             local_transfer_sequence: None,
+            remote_transfer: None,
             local_ready: false,
             local_playback: LocalPlayback::Unavailable,
             local: LocalState::default(),
@@ -1670,7 +1681,7 @@ impl App {
 
     /// Where playback commands go: this computer's player or a remote device.
     pub fn target(&self) -> Target {
-        if self.local_ready && self.local.is_active() {
+        if self.local_ready && self.local.is_active() && !self.transferring_remote() {
             return Target::Local;
         }
         if let Some(selected) = &self.selected_device
@@ -1951,7 +1962,9 @@ impl App {
 
     /// What a device is actually playing, here or elsewhere.
     fn now_playing_live(&self) -> Option<NowPlaying> {
-        if self.local.is_active() && self.local_transfer_sequence != Some(self.local.track_sequence)
+        if self.local.is_active()
+            && !self.transferring_remote()
+            && self.local_transfer_sequence != Some(self.local.track_sequence)
         {
             let track = self.local.track.as_ref()?;
             let cached = track
@@ -3000,6 +3013,7 @@ impl App {
     /// Clears account data while preserving request serials that reject late answers.
     fn reset_data(&mut self) {
         self.local_transfer_sequence = None;
+        self.remote_transfer = None;
         self.queue_start_pending = None;
         self.pending_album_queues.clear();
         self.pending_queue_batches.clear();
@@ -3121,6 +3135,14 @@ impl App {
     }
 
     fn handle_local(&mut self, state: LocalState) {
+        if !state.is_active()
+            && self
+                .remote_transfer
+                .as_ref()
+                .is_some_and(|pending| pending.confirmed)
+        {
+            self.remote_transfer = None;
+        }
         if self
             .local_transfer_sequence
             .is_some_and(|sequence| sequence != state.track_sequence)
@@ -5793,6 +5815,10 @@ impl App {
     }
 
     fn refresh_queue(&mut self, force: bool) {
+        if self.transferring_remote() {
+            self.queue_recheck_at = Some(Instant::now() + QUEUE_RECHECK);
+            return;
+        }
         if !self.is_connected() || !self.network_reachable {
             return;
         }
@@ -6699,6 +6725,35 @@ impl App {
                     return;
                 }
                 self.remote_poll_pending = false;
+                if self.transferring_remote()
+                    && let Ok(state) = &result
+                {
+                    let expected = self.remote.as_ref().map(|remote| &remote.state);
+                    let agrees = state
+                        .as_ref()
+                        .zip(expected)
+                        .is_some_and(|(state, expected)| {
+                            state.device.as_ref().and_then(|device| device.id.as_ref())
+                                == self.selected_device.as_ref()
+                                && state.item.as_ref().map(PlayableItem::uri)
+                                    == expected.item.as_ref().map(PlayableItem::uri)
+                                && state.context == expected.context
+                                && state
+                                    .progress_ms
+                                    .unwrap_or(0)
+                                    .abs_diff(expected.progress_ms.unwrap_or(0))
+                                    < 5000
+                        });
+                    if !agrees {
+                        self.poll_remote_soon();
+                        return;
+                    }
+                    if !self.local.is_active() {
+                        self.remote_transfer = None;
+                    } else if let Some(pending) = &mut self.remote_transfer {
+                        pending.confirmed = true;
+                    }
+                }
                 match result {
                     Ok(state) => {
                         let previous_uri = self.remote.as_ref().and_then(|remote| {
@@ -8167,11 +8222,24 @@ impl App {
                     self.poll_remote_soon();
                     self.refresh_devices();
                 }
-                Err(error) => self.toast_error(
-                    // Translators: {error} is an error message.
-                    gettext(self.locale, "Couldn't switch device: {error}")
-                        .replace("{error}", &error.to_string()),
-                ),
+                Err(error) => {
+                    if self
+                        .remote_transfer
+                        .as_ref()
+                        .is_some_and(|pending| pending.device_id == device_id)
+                        && self.selected_device.as_ref() == Some(&device_id)
+                        && let Some(pending) = self.remote_transfer.take()
+                    {
+                        self.selected_device = pending.previous_device;
+                        self.remote = pending.previous_remote;
+                        self.optimistic_playing = None;
+                    }
+                    self.toast_error(
+                        // Translators: {error} is an error message.
+                        gettext(self.locale, "Couldn't switch device: {error}")
+                            .replace("{error}", &error.to_string()),
+                    );
+                }
             },
             ApiResponse::QueueAdded { label: _, result } => match result {
                 Ok(()) => {
@@ -9560,8 +9628,56 @@ impl App {
     }
 
     fn transfer_remote(&mut self, device_id: String, play: bool) {
+        if self.local.is_active()
+            && let Some(now) = self.now_playing_live()
+        {
+            let item = self.now_playing_item();
+            let context = self
+                .playing_context_uri()
+                .map(|uri| crate::api::models::Context {
+                    kind: util::uri_kind(&uri).unwrap_or_default().into(),
+                    uri,
+                });
+            self.remote_transfer = Some(RemoteTransfer {
+                device_id: device_id.clone(),
+                at: Instant::now(),
+                previous_device: self.selected_device.clone(),
+                previous_remote: self.remote.take(),
+                confirmed: false,
+            });
+            let mut device = self
+                .devices
+                .iter()
+                .find(|device| device.id.as_ref() == Some(&device_id))
+                .cloned()
+                .unwrap_or_default();
+            device.id = Some(device_id.clone());
+            device.is_active = true;
+            self.remote = Some(RemoteSnapshot {
+                state: PlaybackState {
+                    device: Some(device),
+                    item,
+                    context,
+                    progress_ms: Some(now.position_ms),
+                    is_playing: play,
+                    shuffle_state: now.shuffle,
+                    repeat_state: now.repeat.api_name().into(),
+                    ..Default::default()
+                },
+                received_at: Instant::now(),
+            });
+            self.optimistic_playing = Some((play, Instant::now()));
+            self.queue_seq += 1;
+        }
         self.selected_device = Some(device_id.clone());
         self.backend.api(ApiRequest::Transfer { device_id, play });
+    }
+
+    fn transferring_remote(&self) -> bool {
+        self.remote_transfer.as_ref().is_some_and(|pending| {
+            pending.at.elapsed() < PLAYBACK_HOLD
+                && self.selected_device.as_ref() == Some(&pending.device_id)
+        })
     }
 
     /// Adds a row to Next up immediately, before the context's upcoming rows.
@@ -23970,6 +24086,64 @@ mod tests {
                 assert_eq!(app.manual_queue, ["spotify:track:extra"]);
                 app.backend.shutdown();
             }
+        }
+    }
+
+    #[test]
+    fn transfer_to_remote_keeps_local_context_position_and_queue_until_confirmed() {
+        for playing in [false, true] {
+            let mut app = test_app("transfer-to-soloist");
+            app.local_ready = true;
+            app.local_device_id = Some("local".into());
+            app.local = LocalState {
+                connected: true,
+                playback: if playing {
+                    Playback::Playing
+                } else {
+                    Playback::Paused
+                },
+                position_ms: 199_000,
+                track: Some(crate::player::LocalTrack {
+                    uri: "spotify:track:current".into(),
+                    duration_ms: 300_000,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            app.assumed_context = Some(AssumedContext {
+                uri: "spotify:playlist:blend".into(),
+                shuffle: None,
+                at: Instant::now(),
+            });
+            app.queue = loaded_queue(
+                "spotify:track:current",
+                &[
+                    "spotify:track:queued",
+                    "spotify:track:queued",
+                    "spotify:track:next",
+                ],
+            );
+            let before = queue_uris(&app);
+            let old_seq = app.queue_seq;
+            app.transfer("soloist".into());
+            assert_eq!(app.target(), Target::Remote(Some("soloist".into())));
+            assert_eq!(app.now_playing().unwrap().position_ms, 199_000);
+            assert_eq!(app.now_playing().unwrap().playing, playing);
+            assert_eq!(
+                app.playing_context_uri().as_deref(),
+                Some("spotify:playlist:blend")
+            );
+            app.handle_api(ApiResponse::Queue {
+                seq: old_seq,
+                result: Ok(Queue::default()),
+            });
+            app.handle_api(ApiResponse::PlaybackState {
+                seq: app.remote_poll_seq,
+                result: Ok(None),
+            });
+            assert_eq!(app.now_playing().unwrap().uri, "spotify:track:current");
+            assert_eq!(queue_uris(&app), before);
+            assert!(app.backend.take_player_commands().is_empty());
         }
     }
 

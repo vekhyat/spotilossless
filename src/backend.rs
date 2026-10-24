@@ -5807,10 +5807,25 @@ async fn over_connect(
                 result,
             }
         }
-        ApiRequest::Transfer { device_id, .. } => {
+        ApiRequest::Transfer { device_id, play } => {
             connect.restricted_target(Some(device_id))?;
+            let restore = crate::sonos::command_body(
+                if *play {
+                    RemoteAction::Play
+                } else {
+                    RemoteAction::Pause
+                },
+                None,
+                0,
+                false,
+                "",
+            )?;
+            let result = transfer_then_restore(connect.transfer(session, device_id), || {
+                crate::sonos::command(session, device_id, &restore)
+            })
+            .await;
             ApiResponse::Transferred {
-                result: connect.transfer(session, device_id).await,
+                result,
                 device_id: device_id.clone(),
             }
         }
@@ -5843,6 +5858,18 @@ async fn over_connect(
         }
         _ => return None,
     })
+}
+
+async fn transfer_then_restore<F, Fut>(
+    transfer: impl std::future::Future<Output = ApiResult<()>>,
+    restore: F,
+) -> ApiResult<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ApiResult<()>>,
+{
+    transfer.await?;
+    restore().await
 }
 
 /// Waits for shuffle to succeed before starting playback, preserving either error.
@@ -9200,6 +9227,29 @@ mod cover_routing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn connect_transfer_restores_playback_only_after_a_successful_native_handoff() {
+        let restored = std::cell::Cell::new(false);
+        transfer_then_restore(async { Ok(()) }, || async {
+            restored.set(true);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert!(restored.get());
+        restored.set(false);
+        let result = transfer_then_restore(
+            async { Err(ApiError::Network("transfer failed".into())) },
+            || async {
+                restored.set(true);
+                Ok(())
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(!restored.get());
+    }
 
     /// Avoids shared playlist search after a successful session read.
     #[tokio::test]
