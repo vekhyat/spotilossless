@@ -19,6 +19,37 @@ const POLL: Duration = Duration::from_secs(2);
 const STABLE: Duration = Duration::from_secs(60);
 const KEY_LIMIT: u64 = 4096;
 const STORE_ERROR: &str = "Soloist's API key is unavailable. Unlock Secret Service and run spotifast soloist setup again.";
+/// How long `soloist --version` may take. A first start from a slow disk,
+/// such as a Raspberry Pi's SD card, or a busy login can take seconds.
+const VERSION_LIMIT: Duration = Duration::from_secs(20);
+/// How long an external receiver's `ctl status` may take, for the same reason.
+const CONTROL_LIMIT: Duration = Duration::from_secs(10);
+const NOT_RUNNING: &str = "Spotify's download did not run on this computer. Try again later.";
+
+/// What the guide and the supervisor say when Secret Service cannot give
+/// Soloist's key. Never formats the error: it describes only its kind.
+pub(crate) fn keyring_message(error: crate::credentials::Error) -> &'static str {
+    use crate::credentials::Error;
+    match error {
+        Error::Locked => {
+            "Your keyring is locked or refused access, so Soloist's key can't be read. Unlock it, then choose Lossless again."
+        }
+        Error::Unavailable | Error::Timeout => {
+            "Soloist's key lives in your keyring, and no keyring answered yet. Start one that provides Secret Service, such as GNOME Keyring or KWallet. Spotifast keeps trying."
+        }
+        _ => STORE_ERROR,
+    }
+}
+
+/// Whether asking Secret Service again can help without the listener: it
+/// was not running yet. A locked or refused keyring needs them, and asking
+/// again would only repeat its unlock prompt.
+fn keyring_may_recover(error: crate::credentials::Error) -> bool {
+    matches!(
+        error,
+        crate::credentials::Error::Unavailable | crate::credentials::Error::Timeout
+    )
+}
 
 fn default_name() -> String {
     "Spotilossless Soloist".into()
@@ -120,12 +151,13 @@ pub fn setup(dirs: &AppDirs, mut config: Config, input: impl BufRead) -> Result<
 /// for an unlock prompt, so call it off the UI thread.
 pub fn save_key(key: &str) -> Result<(), String> {
     let key = ApiKey::parse(key.trim().as_bytes().to_vec())?;
-    crate::credentials::store_soloist_key(key.0.as_bytes()).map_err(|_| STORE_ERROR.to_string())
+    crate::credentials::store_soloist_key(key.0.as_bytes())
+        .map_err(|error| keyring_message(error).to_string())
 }
 
 /// Spotify's own download for this computer. Spotify asks that Soloist is
-/// not redistributed, so it is fetched from here on the listener's request
-/// and never mirrored or bundled.
+/// not redistributed, so it is fetched from here, when the listener asks or
+/// to replace a build Spotify is about to stop, and never mirrored or bundled.
 pub fn download_url() -> Option<&'static str> {
     match std::env::consts::ARCH {
         "x86_64" => Some("https://soloist-builds.spotifycdn.com/soloist_release_x86_64.tar.gz"),
@@ -144,6 +176,134 @@ pub const DOWNLOAD_LIMIT: u64 = 128 * 1024 * 1024;
 
 /// Spotify stops a build this long after its build date (exit code 10).
 const LIFETIME_DAYS: i32 = 90;
+/// What a build Spotify has stopped exits with.
+const EXPIRED_EXIT: i32 = 10;
+
+/// Why `soloist --version` gave no build.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuildFailure {
+    pub message: String,
+    /// It ran out of time rather than failed: asking again may answer.
+    pub slow: bool,
+}
+
+impl BuildFailure {
+    fn lasting(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            slow: false,
+        }
+    }
+
+    /// Why `binary` did not run, from the loader's complaint on `stderr`.
+    /// The loader stops at the first thing it lacks, and every clean
+    /// distribution tried lacks libatomic, which would hide a glibc that is
+    /// too old as well. So the glibc the binary asks for is compared with
+    /// this system's too, and the listener hears about both at once.
+    fn diagnose(binary: &Path, stderr: &str) -> Self {
+        Self::diagnose_on(binary, stderr, system_glibc())
+    }
+
+    /// [`Self::diagnose`] for a system with glibc `system`.
+    fn diagnose_on(binary: &Path, stderr: &str, system: Option<(u32, u32)>) -> Self {
+        let needed = loader_glibc(stderr).or_else(|| {
+            let bytes = std::fs::read(binary).ok()?;
+            newest_glibc(&bytes)
+        });
+        match (needed, system) {
+            (Some(needed), Some(system)) if system < needed => Self::lasting(format!(
+                "This Soloist build needs glibc {}.{} or newer, and this system has {}.{}. Update to a newer release of your distribution, such as Ubuntu 24.04, then download again.",
+                needed.0, needed.1, system.0, system.1
+            )),
+            _ => Self::from_loader(stderr),
+        }
+    }
+
+    /// Reads the dynamic loader's complaint. Names only a library or a glibc
+    /// version taken from it, never the rest of what the binary printed.
+    fn from_loader(stderr: &str) -> Self {
+        if let Some(version) = loader_glibc(stderr) {
+            return Self::lasting(format!(
+                "This Soloist build needs glibc {}.{} or newer, and this system's is older. Update to a newer release of your distribution, then download again.",
+                version.0, version.1
+            ));
+        }
+        // `error while loading shared libraries: libatomic.so.1: cannot open ...`
+        if let Some(library) = stderr
+            .split_once("error while loading shared libraries: ")
+            .and_then(|(_, rest)| loader_token(rest))
+        {
+            if library == "libatomic.so.1" {
+                return Self::lasting(
+                    "Soloist needs the system library libatomic.so.1, which many distributions leave out. Install libatomic1 (Debian, Ubuntu) or libatomic (Fedora), then download again.",
+                );
+            }
+            return Self::lasting(format!(
+                "Soloist needs the system library {library}. Install the package that provides it, then download again."
+            ));
+        }
+        Self::lasting(NOT_RUNNING)
+    }
+}
+
+/// A plain name or version at the start of `text`, or nothing.
+fn loader_token(text: &str) -> Option<String> {
+    let token: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
+        .collect();
+    (!token.is_empty() && token.len() <= 64).then_some(token)
+}
+
+/// `2.38` as `(2, 38)`, ignoring anything after the minor version.
+fn glibc_version(text: &str) -> Option<(u32, u32)> {
+    let mut parts = text.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor: String = parts
+        .next()?
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    Some((major, minor.parse().ok()?))
+}
+
+/// `version `GLIBC_2.38' not found (required by soloist)`
+fn loader_glibc(stderr: &str) -> Option<(u32, u32)> {
+    let (_, rest) = stderr.split_once("version `GLIBC_")?;
+    glibc_version(&loader_token(rest)?)
+}
+
+/// The newest `GLIBC_x.y` symbol version an executable names. They sit in
+/// its dynamic string table, so a scan finds them without parsing the ELF.
+fn newest_glibc(bytes: &[u8]) -> Option<(u32, u32)> {
+    const MARK: &[u8] = b"GLIBC_";
+    bytes
+        .windows(MARK.len())
+        .enumerate()
+        .filter(|(_, window)| *window == MARK)
+        .filter_map(|(start, _)| {
+            let rest = &bytes[start + MARK.len()..];
+            let end = rest
+                .iter()
+                .position(|byte| !(byte.is_ascii_digit() || *byte == b'.'))
+                .unwrap_or(rest.len())
+                .min(16);
+            glibc_version(std::str::from_utf8(&rest[..end]).ok()?)
+        })
+        .max()
+}
+
+/// The glibc this process, and so a binary it starts, runs against.
+fn system_glibc() -> Option<(u32, u32)> {
+    #[cfg(target_env = "gnu")]
+    {
+        // SAFETY: glibc returns a static NUL-terminated string.
+        let version = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) };
+        glibc_version(version.to_str().ok()?)
+    }
+    #[cfg(not(target_env = "gnu"))]
+    None
+}
 
 /// An installed build, read from `soloist --version`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,35 +340,47 @@ impl Build {
     }
 }
 
-/// Runs the binary's `--version` with a short limit; an expired or foreign
-/// binary answers nothing usable.
-pub fn read_build(binary: &Path) -> Option<Build> {
-    let mut child = Command::new(binary)
+/// Runs the binary's `--version` with a limit. A binary this computer cannot
+/// run says why when the loader does: too old a glibc or a missing library.
+pub fn read_build(binary: &Path) -> Result<Build, BuildFailure> {
+    let child = Command::new(binary)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let deadline = Instant::now() + Duration::from_secs(3);
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => OwnedChild(child),
+        Err(error) if error.raw_os_error() == Some(libc::ENOEXEC) => {
+            return Err(BuildFailure::lasting(
+                "Spotify's download is for another processor than this computer's.",
+            ));
+        }
+        Err(_) => return Err(BuildFailure::lasting(NOT_RUNNING)),
+    };
+    let deadline = Instant::now() + VERSION_LIMIT;
     loop {
-        match child.try_wait() {
+        match child.0.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
+            Ok(None) => {
+                return Err(BuildFailure {
+                    message: "Soloist took too long to start. Try again.".into(),
+                    slow: true,
+                });
             }
+            Err(_) => return Err(BuildFailure::lasting(NOT_RUNNING)),
         }
     }
-    let mut text = String::new();
-    std::io::Read::read_to_string(
-        &mut std::io::Read::take(child.stdout.take()?, 4096),
-        &mut text,
-    )
-    .ok()?;
-    Build::parse(&text)
+    fn read(pipe: Option<impl std::io::Read>) -> String {
+        let mut text = String::new();
+        if let Some(pipe) = pipe {
+            let _ = std::io::Read::read_to_string(&mut pipe.take(4096), &mut text);
+        }
+        text
+    }
+    Build::parse(&read(child.0.stdout.take()))
+        .ok_or_else(|| BuildFailure::diagnose(binary, &read(child.0.stderr.take())))
 }
 
 /// What the setup guide shows. Read off the UI thread: it starts the
@@ -217,7 +389,11 @@ pub fn read_build(binary: &Path) -> Option<Build> {
 pub struct Status {
     pub config: Option<Config>,
     pub build: Option<Build>,
+    /// Why a configured build gave no version.
+    pub build_error: Option<BuildFailure>,
     pub key_saved: bool,
+    /// Secret Service could not say whether a key is saved.
+    pub keyring_error: Option<crate::credentials::Error>,
     /// The receiver's Spotify Connect id, from its data directory once it
     /// has run. Setup trusts only this id, never a name on the network.
     pub device_id: Option<String>,
@@ -231,6 +407,15 @@ pub struct Status {
 impl Status {
     pub fn ready(&self) -> bool {
         self.build.is_some() && self.key_saved
+    }
+
+    /// Reading again later may finish the setup without the listener: the
+    /// build was slow to answer, or no keyring was running yet.
+    pub fn may_settle(&self) -> bool {
+        self.build_error
+            .as_ref()
+            .is_some_and(|failure| failure.slow)
+            || self.keyring_error.is_some_and(keyring_may_recover)
     }
 
     /// Whether a receiver found on the network is this computer's Soloist,
@@ -263,10 +448,15 @@ pub fn status(dirs: &AppDirs) -> Status {
         Ok(config) => (config, None),
         Err(error) => (None, Some(error)),
     };
-    let build = config
-        .as_ref()
-        .and_then(|config| read_build(&config.binary));
-    let key_saved = crate::credentials::soloist_key().is_ok_and(|key| key.is_some());
+    let (build, build_error) = match config.as_ref().map(|config| read_build(&config.binary)) {
+        Some(Ok(build)) => (Some(build), None),
+        Some(Err(failure)) => (None, Some(failure)),
+        None => (None, None),
+    };
+    let (key_saved, keyring_error) = match crate::credentials::soloist_key() {
+        Ok(key) => (key.is_some(), None),
+        Err(error) => (false, Some(error)),
+    };
     let device_id = config
         .as_ref()
         .and_then(|config| read_device_id(&config.data_dir));
@@ -276,7 +466,9 @@ pub fn status(dirs: &AppDirs) -> Status {
     Status {
         config,
         build,
+        build_error,
         key_saved,
+        keyring_error,
         device_id,
         local_addresses,
         error,
@@ -342,9 +534,12 @@ fn install_with(
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700));
     }
-    let Some(build) = read_build(&binary) else {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err("Spotify's download did not run on this computer. Try again later.".into());
+    let build = match read_build(&binary) {
+        Ok(build) => build,
+        Err(failure) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(failure.message);
+        }
     };
     let folder = home.join(format!("build-{}", build.version));
     let _ = std::fs::remove_dir_all(&folder);
@@ -405,6 +600,12 @@ struct Snapshot {
     /// Its Spotify Connect id from `<data_dir>/.device_id`, read off the UI
     /// thread. The only way Soloist is recognised: names are not identities.
     device_id: Option<String>,
+    /// Spotify stopped the build this supervisor runs (exit code 10), which
+    /// it can do before the build's 90 days are up.
+    expired: bool,
+    /// The volume the receiver last reported. Soloist starts at its own
+    /// default, so a receiver started again starts here instead.
+    volume: Option<u8>,
 }
 
 /// Cheap, thread-safe access for the app and a PipeWire tap. PID is cleared on
@@ -420,6 +621,24 @@ impl Handle {
     /// Whether the receiver says it has an account, from its local trace.
     pub fn signed_in(&self) -> Option<bool> {
         self.0.read().unwrap_or_else(|p| p.into_inner()).signed_in
+    }
+
+    /// The Connect name it runs or last said it runs under.
+    pub fn device_name(&self) -> Option<String> {
+        self.0
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .device_name
+            .clone()
+    }
+
+    /// Whether Spotify has stopped the build the receiver runs.
+    pub fn expired(&self) -> bool {
+        self.0.read().unwrap_or_else(|p| p.into_inner()).expired
+    }
+
+    fn set_expired(&self, expired: bool) {
+        self.0.write().unwrap_or_else(|p| p.into_inner()).expired = expired;
     }
 
     pub fn device_id(&self) -> Option<String> {
@@ -450,6 +669,24 @@ impl Handle {
         if device_id.is_some() {
             snapshot.device_id = device_id;
         }
+    }
+
+    /// Tests stand in for what the receiver's local feed says.
+    #[cfg(test)]
+    pub(crate) fn assume_signed_in(&self, signed_in: Option<bool>) {
+        self.0.write().unwrap_or_else(|p| p.into_inner()).signed_in = signed_in;
+    }
+
+    /// Tests stand in for a receiver that has started, or stopped.
+    #[cfg(test)]
+    pub(crate) fn assume_pid(&self, pid: Option<u32>) {
+        self.0.write().unwrap_or_else(|p| p.into_inner()).pid = pid;
+    }
+
+    /// Tests stand in for a build Spotify has stopped.
+    #[cfg(test)]
+    pub(crate) fn assume_expired(&self) {
+        self.set_expired(true);
     }
 
     /// Tests and demo captures stand in for a receiver that has written its id.
@@ -638,7 +875,7 @@ fn control_ready(config: &Config, stopping: &AtomicBool) -> bool {
         return false;
     };
     let mut child = OwnedChild(child);
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + CONTROL_LIMIT;
     while !stopping.load(Ordering::Relaxed) && Instant::now() < deadline {
         match child.0.try_wait() {
             Ok(Some(status)) => return status.success(),
@@ -649,33 +886,64 @@ fn control_ready(config: &Config, stopping: &AtomicBool) -> bool {
     false
 }
 
+/// Why the supervisor has no key to start Soloist with.
+#[derive(Debug)]
+struct KeyFailure {
+    message: String,
+    /// No keyring was running yet; a later attempt may find one.
+    retry: bool,
+}
+
+impl KeyFailure {
+    fn lasting(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retry: false,
+        }
+    }
+}
+
 /// Secret Service can wait for an unlock prompt. Keep that wait off both the
 /// UI and supervisor, so quitting still stops an owned receiver promptly.
-fn read_key(stopping: &AtomicBool) -> Result<Option<ApiKey>, String> {
+/// It waits for that one request however long the listener takes: giving up
+/// would leave the prompt on screen, answered to nobody, and a new request
+/// would stack a second prompt on it.
+fn read_key(stopping: &AtomicBool) -> Result<Option<ApiKey>, KeyFailure> {
     let (send, receive) = mpsc::channel();
     std::thread::Builder::new()
         .name("soloist-keyring".into())
         .spawn(move || {
             let _ = send.send(crate::credentials::soloist_key());
         })
-        .map_err(|_| STORE_ERROR.to_string())?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+        .map_err(|_| KeyFailure::lasting(STORE_ERROR))?;
     loop {
         if stopping.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        if Instant::now() >= deadline {
-            return Err(STORE_ERROR.into());
-        }
         match receive.recv_timeout(Duration::from_millis(100)) {
-            Ok(Ok(Some(bytes))) => return ApiKey::parse(bytes).map(Some),
-            Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => return Err(STORE_ERROR.into()),
+            Ok(Ok(Some(bytes))) => {
+                return ApiKey::parse(bytes).map(Some).map_err(KeyFailure::lasting);
+            }
+            Ok(Ok(None)) => {
+                return Err(KeyFailure::lasting(
+                    "Soloist's key is no longer in your keyring. Add it again in the Lossless guide.",
+                ));
+            }
+            Ok(Err(error)) => {
+                return Err(KeyFailure {
+                    message: keyring_message(error).into(),
+                    retry: keyring_may_recover(error),
+                });
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(KeyFailure::lasting(STORE_ERROR));
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
 }
 
-fn launch(config: &Config, key: &ApiKey) -> Result<OwnedChild, String> {
+fn launch(config: &Config, key: &ApiKey, volume: Option<u8>) -> Result<OwnedChild, String> {
     check_binary(config)?;
     // Soloist accepts its key only via argv, not stdin. Never format this
     // Command, inherit output, or log arguments. Linux process inspection can
@@ -704,13 +972,13 @@ fn launch(config: &Config, key: &ApiKey) -> Result<OwnedChild, String> {
         .arg(&key.0)
         .arg("-D")
         .arg(&config.data_dir)
-        .args(["-w", "127.0.0.1:0"])
-        .spawn()
-        .map(OwnedChild)
-        .map_err(|_| {
-            "Couldn't start Soloist. Install a current Linux build and check its permissions."
-                .into()
-        })
+        .args(["-w", "127.0.0.1:0"]);
+    if let Some(volume) = volume {
+        command.arg("-i").arg(volume.to_string());
+    }
+    command.spawn().map(OwnedChild).map_err(|_| {
+        "Couldn't start Soloist. Install a current Linux build and check its permissions.".into()
+    })
 }
 
 fn supervise(
@@ -720,7 +988,7 @@ fn supervise(
     stopping: Arc<AtomicBool>,
     report: &impl Fn(String),
     changed: &impl Fn(),
-    load_key: impl Fn(&AtomicBool) -> Result<Option<ApiKey>, String>,
+    load_key: impl Fn(&AtomicBool) -> Result<Option<ApiKey>, KeyFailure>,
 ) {
     let mut owned: Option<OwnedChild> = None;
     let mut process = None;
@@ -733,6 +1001,9 @@ fn supervise(
         state.publish(&config, pid, read_device_id(&config.data_dir));
         changed();
     };
+    // A new supervisor runs a new build or key; whether Spotify stopped the
+    // old one is for that one to find out.
+    state.set_expired(false);
     publish(None);
     let mut notify = |message: String| {
         if last_error.as_ref() != Some(&message) {
@@ -742,15 +1013,27 @@ fn supervise(
     };
     while !stopping.load(Ordering::Relaxed) {
         // try_wait reaps our child, even when its PID file was never written.
-        let exited = owned
-            .as_mut()
-            .is_some_and(|child| !matches!(child.0.try_wait(), Ok(None)));
-        if exited || process.is_some_and(|old: Identity| identity(old.pid) != Some(old)) {
+        // It alone decides for a child we own: a /proc read that fails or
+        // races must never stop a receiver that is still playing.
+        let exit = owned.as_mut().and_then(|child| match child.0.try_wait() {
+            Ok(None) => None,
+            Ok(Some(status)) => Some(status.code()),
+            Err(_) => Some(None),
+        });
+        let vanished =
+            owned.is_none() && process.is_some_and(|old: Identity| identity(old.pid) != Some(old));
+        if exit.is_some() || vanished {
             owned = None;
             process = None;
             publish(None);
             next_try = Instant::now() + backoff.failed();
-            notify("Soloist stopped. Its build may have expired (builds last about 90 days). Install a current build if restarting does not help. Spotifast will retry automatically.".into());
+            if exit == Some(Some(EXPIRED_EXIT)) {
+                state.set_expired(true);
+                changed();
+                notify("Spotify has stopped this Soloist build. Spotifast is getting the current one from Spotify.".into());
+            } else {
+                notify("Soloist stopped unexpectedly. Spotifast is starting it again.".into());
+            }
         }
         if process.is_some() {
             // A first start writes its id a moment after launch.
@@ -778,9 +1061,15 @@ fn supervise(
                     match load_key(&stopping) {
                         Ok(Some(loaded)) => key = Some(loaded),
                         Ok(None) => break,
-                        Err(error) => {
-                            notify(error);
-                            // Unlocking may need user input. Do not leave a new
+                        // A keyring that starts after Spotifast, as at some
+                        // logins, is asked again on the usual delay.
+                        Err(failure) if failure.retry => {
+                            notify(failure.message);
+                            next_try = Instant::now() + backoff.failed();
+                        }
+                        Err(failure) => {
+                            notify(failure.message);
+                            // Unlocking needs the listener. Do not leave a new
                             // Secret Service request on every retry.
                             break;
                         }
@@ -790,7 +1079,8 @@ fn supervise(
                     break;
                 }
                 if let Some(key) = key.as_ref() {
-                    match launch(&config, key) {
+                    let volume = state.0.read().unwrap_or_else(|p| p.into_inner()).volume;
+                    match launch(&config, key, volume) {
                         Ok(child) => {
                             let pid = child.0.id();
                             process = identity(pid);
@@ -886,6 +1176,137 @@ mod tests {
         ] {
             assert_eq!(Build::parse(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn a_build_that_cannot_run_here_says_why_without_echoing_its_output() {
+        let glibc = BuildFailure::from_loader(
+            "soloist: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found (required by soloist)\n",
+        );
+        assert!(!glibc.slow);
+        assert!(
+            glibc.message.contains("glibc 2.38 or newer"),
+            "{}",
+            glibc.message
+        );
+        assert_eq!(
+            newest_glibc(b"\0GLIBC_2.2.5\0GLIBC_2.38\0GLIBC_2.34\0GLIBC_PRIVATE\0"),
+            Some((2, 38))
+        );
+        assert_eq!(newest_glibc(b"no versions here"), None);
+        assert!(system_glibc().is_some_and(|version| version >= (2, 17)));
+        let library = BuildFailure::from_loader(
+            "soloist: error while loading shared libraries: libatomic.so.1: cannot open shared object file: No such file or directory\n",
+        );
+        assert!(
+            library.message.contains("libatomic1 (Debian, Ubuntu)"),
+            "{}",
+            library.message
+        );
+        let other = BuildFailure::from_loader("SECRET-OUTPUT segfault");
+        assert_eq!(other.message, NOT_RUNNING);
+        let hostile = BuildFailure::from_loader("version `GLIBC_$(rm -rf ~)' not found");
+        assert_eq!(
+            hostile.message, NOT_RUNNING,
+            "nothing but a plain token is named"
+        );
+
+        let scratch = Scratch::new();
+        let config = scratch.script(
+            "echo \"soloist: error while loading shared libraries: libatomic.so.1: cannot open shared object file\" >&2\nexit 127",
+        );
+        let failure = read_build(&config.binary).unwrap_err();
+        assert!(
+            failure.message.contains("libatomic.so.1"),
+            "{}",
+            failure.message
+        );
+        // A missing library hides a glibc that is too old; the binary's own
+        // needs still name it.
+        let config = scratch.script(
+            "echo \"soloist: error while loading shared libraries: libatomic.so.1: cannot open\" >&2\nexit 127\n# GLIBC_9.99",
+        );
+        let failure = read_build(&config.binary).unwrap_err();
+        assert!(
+            failure.message.contains("glibc 9.99 or newer"),
+            "{}",
+            failure.message
+        );
+        let config = scratch.script("echo 'soloist 1.0 build 1 (20261023) (g0) (linux/x86_64)'");
+        assert_eq!(read_build(&config.binary).unwrap().version, "1.0");
+    }
+
+    #[test]
+    fn only_a_slow_build_or_a_missing_keyring_settles_by_itself() {
+        use crate::credentials::Error;
+        let slow = BuildFailure {
+            message: String::new(),
+            slow: true,
+        };
+        let cases = [
+            (Some(slow.clone()), None, true),
+            (Some(BuildFailure::lasting(NOT_RUNNING)), None, false),
+            (None, Some(Error::Unavailable), true),
+            (None, Some(Error::Timeout), true),
+            (None, Some(Error::Locked), false),
+            (None, None, false),
+        ];
+        for (build_error, keyring_error, settles) in cases {
+            let status = Status {
+                build_error,
+                keyring_error,
+                ..Default::default()
+            };
+            assert_eq!(status.may_settle(), settles, "{status:?}");
+        }
+        assert_ne!(
+            keyring_message(Error::Locked),
+            keyring_message(Error::Unavailable)
+        );
+    }
+
+    #[test]
+    fn a_keyring_that_starts_late_is_asked_again_and_a_refusal_is_not() {
+        let scratch = Scratch::new();
+        let config = scratch.script("exec sleep 60");
+        let asked = Arc::new(AtomicU64::new(0));
+        let count = asked.clone();
+        let RunningFixture {
+            mut supervisor,
+            changed,
+            reports,
+            ..
+        } = run_fixture(config, move |_| {
+            if count.fetch_add(1, Ordering::Relaxed) == 0 {
+                Err(KeyFailure {
+                    message: "no keyring yet".into(),
+                    retry: true,
+                })
+            } else {
+                Ok(Some(ApiKey("dummy-key".into())))
+            }
+        });
+        let (pid, _) = next_pid(&changed);
+        assert!(identity(pid).is_some(), "started once the keyring answered");
+        assert_eq!(asked.load(Ordering::Relaxed), 2);
+        assert_eq!(*reports.lock().unwrap(), ["no keyring yet"]);
+        supervisor.shutdown();
+
+        let config = scratch.script("exec sleep 60");
+        let asked = Arc::new(AtomicU64::new(0));
+        let count = asked.clone();
+        let RunningFixture {
+            supervisor, handle, ..
+        } = run_fixture(config, move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+            Err(KeyFailure::lasting("refused"))
+        });
+        let mut supervisor = supervisor;
+        if let Some(thread) = supervisor.thread.take() {
+            thread.join().unwrap();
+        }
+        assert_eq!(asked.load(Ordering::Relaxed), 1, "no second unlock prompt");
+        assert_eq!(handle.pid(), None);
     }
 
     #[test]
@@ -1120,7 +1541,7 @@ mod tests {
         let scratch = Scratch::new();
         let mut config = scratch.config();
         config.binary = scratch.0.join("missing");
-        let error = match launch(&config, &key) {
+        let error = match launch(&config, &key, None) {
             Ok(_) => panic!("missing binary launched"),
             Err(error) => error,
         };
@@ -1135,7 +1556,7 @@ mod tests {
         let scratch = Scratch::new();
         let config = scratch.script("exec sleep 30");
         let pid = std::thread::spawn(move || {
-            let child = launch(&config, &ApiKey("dummy-key".into())).unwrap();
+            let child = launch(&config, &ApiKey("dummy-key".into()), None).unwrap();
             let pid = child.0.id();
             // Skips `OwnedChild`'s kill, as a killed Spotifast would.
             std::mem::forget(child);
@@ -1196,7 +1617,7 @@ mod tests {
 
     fn run_fixture(
         config: Config,
-        load_key: impl Fn(&AtomicBool) -> Result<Option<ApiKey>, String> + Send + 'static,
+        load_key: impl Fn(&AtomicBool) -> Result<Option<ApiKey>, KeyFailure> + Send + 'static,
     ) -> RunningFixture {
         let state = Handle::default();
         let stopping = Arc::new(AtomicBool::new(false));
@@ -1299,6 +1720,79 @@ mod tests {
             Some(before),
             "external process survives shutdown"
         );
+    }
+
+    #[test]
+    fn a_build_spotify_stopped_says_so_and_a_crash_does_not_blame_the_build() {
+        let scratch = Scratch::new();
+        let RunningFixture {
+            mut supervisor,
+            handle,
+            changed,
+            reports,
+        } = run_fixture(scratch.script("exit 10"), |_| {
+            Ok(Some(ApiKey("dummy-key".into())))
+        });
+        next_pid(&changed);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !handle.expired() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(handle.expired());
+        supervisor.shutdown();
+        assert!(reports.lock().unwrap()[0].contains("stopped this Soloist build"));
+
+        let RunningFixture {
+            mut supervisor,
+            handle: crashed,
+            changed,
+            reports,
+        } = run_fixture(scratch.script("exit 1"), |_| {
+            Ok(Some(ApiKey("dummy-key".into())))
+        });
+        next_pid(&changed);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while reports.lock().unwrap().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        supervisor.shutdown();
+        assert!(!crashed.expired());
+        let reports = reports.lock().unwrap();
+        assert!(reports[0].contains("unexpectedly"), "{reports:?}");
+        assert!(!reports[0].contains("expire"));
+    }
+
+    #[test]
+    fn a_receiver_started_again_starts_at_the_volume_it_last_reported() {
+        let scratch = Scratch::new();
+        let args = scratch.0.join("args");
+        let config = scratch.script(&format!(
+            "printf '%s\\n' \"$@\" > '{}'\nexec sleep 60",
+            args.display()
+        ));
+        let state = Handle::default();
+        state.0.write().unwrap().volume = Some(73);
+        let volume = state.0.read().unwrap().volume;
+        let child = launch(&config, &ApiKey("dummy-key".into()), volume).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !args.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(child);
+        let args = std::fs::read_to_string(&args).unwrap();
+        assert!(args.contains("-i\n73\n"), "{args}");
+        let none = scratch.0.join("none");
+        let config = scratch.script(&format!(
+            "printf '%s\\n' \"$@\" > '{}'\nexec sleep 60",
+            none.display()
+        ));
+        let child = launch(&config, &ApiKey("dummy-key".into()), None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !none.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(child);
+        assert!(!std::fs::read_to_string(&none).unwrap().contains("-i\n"));
     }
 
     #[test]

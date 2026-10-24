@@ -2,9 +2,10 @@
 //! guide's state, and keeping the receiver running while Lossless is chosen.
 //!
 //! Soloist is Spotify's own player. Spotifast never ships it: the guide
-//! fetches Spotify's download on request, stores the listener's own key in
-//! Secret Service, and waits for the listener to pair it once in Spotify.
-//! Soloist restores that session on later starts.
+//! fetches Spotify's download on request (and again before Spotify stops a
+//! build), stores the listener's own key in Secret Service, and waits for
+//! the listener to pair it once in Spotify. Soloist restores that session
+//! on later starts.
 
 use super::*;
 
@@ -12,6 +13,10 @@ use super::*;
 pub(super) const PAIRING_LIMIT: Duration = Duration::from_secs(90);
 /// How often the network is searched for Soloist while it waits.
 const PAIRING_SEARCH: Duration = Duration::from_secs(5);
+/// How long a failed download of Spotify's current build waits to try again.
+const AUTO_UPDATE_RETRY: Duration = Duration::from_secs(15 * 60);
+/// The longest wait between status reads that may settle by themselves.
+const STATUS_RETRY_LIMIT: Duration = Duration::from_secs(120);
 /// A build this close to Spotify's cut-off is worth updating.
 pub const EXPIRY_WARNING_DAYS: i32 = 14;
 
@@ -39,11 +44,58 @@ pub struct LosslessSetup {
     /// What the supervisor was last told; `None` makes the next frame tell it.
     pub(super) supervised: Option<bool>,
     expiry_warned: bool,
+    /// When to read the status again, because it may settle by itself: the
+    /// build was slow to answer or no keyring was running yet.
+    pub(super) retry_at: Option<Instant>,
+    retries: u32,
+    /// What Soloist's local feed last said about its sign-in.
+    signed_in: Option<bool>,
+    /// The receiver process last seen. Another one, or none, has an empty
+    /// player: Soloist keeps no place across a restart.
+    pid: Option<u32>,
+    /// Where Soloist was in the music, noted while it plays.
+    place: Option<Place>,
+    /// Where a receiver that stopped was. Its next start picks up here: at
+    /// once if it was playing, otherwise at the next press of play.
+    pub(super) interrupted: Option<Place>,
+    /// This run has fetched Spotify's current build on its own once, so a
+    /// build Spotify has not replaced yet cannot download in a loop.
+    auto_updated: bool,
+    /// The install under way is that one, not one the listener asked for.
+    updating_itself: bool,
+    /// When a download of its own that failed, as when Spotify's CDN cannot
+    /// be reached, is tried again.
+    pub(super) auto_update_at: Option<Instant>,
+    /// A resume Spotify has yet to answer.
+    pub(super) resuming: Option<Place>,
+    /// How many times this place has been resumed so far.
+    resume_tries: u32,
+    /// When to try a refused resume again.
+    pub(super) resume_at: Option<Instant>,
 }
 
+/// A song and the point in it, as Soloist last played it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Place {
+    uri: String,
+    context: Option<String>,
+    position_ms: u32,
+    playing: bool,
+}
+
+/// How many times a resume is tried before Spotify's refusal is shown.
+const RESUME_TRIES: u32 = 5;
+/// How long a receiver that has only just started may stay unknown to
+/// Spotify's Connect service between tries.
+const RESUME_RETRY: Duration = Duration::from_secs(2);
+
 impl App {
-    /// Soloist's row in the account's device list, once it has signed in.
-    /// Found by the id Soloist keeps on disk, never by its name.
+    /// Soloist's Connect id once it plays for this account. Found by the id
+    /// Soloist keeps on disk, never by its name. Spotify places it in the
+    /// account: the session's Connect cluster lists it the moment it joins,
+    /// or the Web API's device list does. Soloist's own local feed has the
+    /// last word on whether it is signed in, so a lagging list neither hides
+    /// it once it has joined nor keeps it after it signs out.
     pub fn soloist_device_id(&self) -> Option<String> {
         let id = self
             .lossless
@@ -51,10 +103,50 @@ impl App {
             .as_ref()
             .and_then(|status| status.device_id.clone())
             .or_else(|| self.backend.soloist().device_id())?;
-        self.devices
+        if self.backend.soloist().signed_in() == Some(false) {
+            return None;
+        }
+        let listed = self
+            .devices
             .iter()
-            .find(|device| device.id.as_ref() == Some(&id))
-            .and_then(|device| device.id.clone())
+            .any(|device| device.id.as_ref() == Some(&id))
+            || crate::quality::in_account(crate::quality::current(), &id);
+        listed.then_some(id)
+    }
+
+    /// Keeps Soloist's row while it plays for this account, though a device
+    /// list read before it joined, or one Spotify answers late, leaves it
+    /// out. Without the row a lagging read would undo the choice of Soloist.
+    pub(super) fn keep_soloist_row(&mut self) {
+        let Some(id) = self.soloist_device_id() else {
+            return;
+        };
+        if self
+            .devices
+            .iter()
+            .any(|device| device.id.as_ref() == Some(&id))
+        {
+            return;
+        }
+        let name = self
+            .backend
+            .soloist()
+            .device_name()
+            .or_else(|| {
+                self.lossless
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.config.as_ref())
+                    .map(|config| config.device_name.clone())
+            })
+            .unwrap_or_else(|| crate::soloist::device_name_for(&self.settings.device_name));
+        self.devices.push(Device {
+            id: Some(id),
+            name,
+            is_restricted: true,
+            kind: "computer".into(),
+            ..Default::default()
+        });
     }
 
     /// One read at a time. A request while one is out (after an install or
@@ -104,6 +196,30 @@ impl App {
         if self.lossless.status.is_none() && !self.lossless.status_requested {
             self.request_soloist_status();
         }
+        if self.settings.lossless
+            && !self.lossless.status_requested
+            && self
+                .lossless
+                .retry_at
+                .is_some_and(|at| at <= Instant::now())
+        {
+            self.lossless.retry_at = None;
+            self.request_soloist_status();
+        } else if let Some(at) = self.lossless.retry_at {
+            ctx.request_repaint_after(at.saturating_duration_since(Instant::now()));
+        }
+        // Soloist says on its local feed the moment it signs in; ask Spotify
+        // for the account's devices then rather than at the next poll.
+        let signed_in = self.backend.soloist().signed_in();
+        if signed_in != self.lossless.signed_in {
+            self.lossless.signed_in = signed_in;
+            if signed_in == Some(true) {
+                self.devices_fetched_at = None;
+                self.refresh_devices();
+            }
+        }
+        self.keep_soloist_row();
+        self.follow_soloist_place(ctx);
         let wanted = self.lossless_wanted();
         if self.lossless.status.is_some() && self.lossless.supervised != Some(wanted) {
             self.backend.supervise_soloist(wanted);
@@ -112,8 +228,39 @@ impl App {
         if !wanted {
             self.lossless.pairing = None;
         }
-        if let Some(days) = self.soloist_expiring()
+        // Spotify stops each build after about 90 days, and can stop one
+        // sooner. Its current build is fetched before then, and at once when
+        // it stops this one, keeping the pairing. The listener hears about it
+        // only if that leaves the build still about to stop.
+        let stopped = self.backend.soloist().expired();
+        let expiring = self.soloist_expiring();
+        let retry_due = self
+            .lossless
+            .auto_update_at
+            .is_none_or(|at| at <= Instant::now());
+        if let Some(at) = self.lossless.auto_update_at {
+            ctx.request_repaint_after(at.saturating_duration_since(Instant::now()));
+        }
+        if self.settings.lossless
+            && (stopped || expiring.is_some())
+            && !self.lossless.auto_updated
+            && retry_due
+            && !self.lossless.installing
+            && self
+                .lossless
+                .status
+                .as_ref()
+                .is_some_and(|status| status.config.is_some())
+        {
+            self.lossless.auto_updated = true;
+            self.lossless.updating_itself = true;
+            self.install_soloist();
+        } else if let Some(days) = expiring
             && wanted
+            && (self.lossless.auto_updated || self.lossless.auto_update_at.is_some())
+            && !self.lossless.installing
+            // The date read after the update decides, not the one before it.
+            && !self.lossless.status_requested
             && !self.lossless.expiry_warned
         {
             self.lossless.expiry_warned = true;
@@ -181,6 +328,36 @@ impl App {
         if std::mem::take(&mut self.lossless.status_again) {
             self.request_soloist_status();
         }
+        let mut status = status;
+        if let Some(old) = &self.lossless.status
+            && old.config == status.config
+        {
+            // The same build that answered before was slow this time, not
+            // gone: a busy computer can outlast the limit. A keyring that
+            // cannot answer now, perhaps locked again, does not mean the key
+            // has left it. Neither stops a receiver that runs.
+            if status.build.is_none()
+                && status
+                    .build_error
+                    .as_ref()
+                    .is_some_and(|failure| failure.slow)
+            {
+                status.build.clone_from(&old.build);
+            }
+            if status.keyring_error.is_some() {
+                status.key_saved |= old.key_saved;
+            }
+        }
+        if status.may_settle() {
+            let delay = Duration::from_secs(5)
+                .saturating_mul(1 << self.lossless.retries.min(5))
+                .min(STATUS_RETRY_LIMIT);
+            self.lossless.retries = self.lossless.retries.saturating_add(1);
+            self.lossless.retry_at = Some(Instant::now() + delay);
+        } else {
+            self.lossless.retries = 0;
+            self.lossless.retry_at = None;
+        }
         // Addresses and the id do not change what the receiver runs with.
         let changed = self.lossless.status.as_ref().is_none_or(|old| {
             (&old.config, &old.build, old.key_saved)
@@ -195,14 +372,146 @@ impl App {
 
     pub(super) fn on_soloist_installed(&mut self, result: Result<crate::soloist::Build, String>) {
         self.lossless.installing = false;
+        let by_itself = std::mem::take(&mut self.lossless.updating_itself);
         match result {
             Ok(_) => {
                 self.lossless.install_error = None;
-                self.lossless.expiry_warned = false;
+                // A build the listener fetched is theirs to see; one fetched
+                // on its own speaks up only if it is about to stop too.
+                if !by_itself {
+                    self.lossless.expiry_warned = false;
+                }
                 self.request_soloist_status();
             }
-            Err(error) => self.lossless.install_error = Some(error),
+            Err(error) => {
+                // A download of its own that failed is tried again later
+                // in this run; the notice says what to do meanwhile.
+                if by_itself {
+                    self.lossless.auto_updated = false;
+                    self.lossless.auto_update_at = Some(Instant::now() + AUTO_UPDATE_RETRY);
+                }
+                self.lossless.install_error = Some(error);
+            }
         }
+    }
+
+    /// Notes where Soloist is in the music while it plays. When its process
+    /// stops or is replaced, that place is held for the next one, which
+    /// starts with an empty player: a plain resume would restart the song.
+    fn follow_soloist_place(&mut self, ctx: &egui::Context) {
+        if !self.settings.lossless {
+            self.lossless.place = None;
+            self.lossless.interrupted = None;
+            return;
+        }
+        let pid = self.backend.soloist().pid();
+        if pid != self.lossless.pid {
+            let previous = std::mem::replace(&mut self.lossless.pid, pid);
+            if previous.is_some() && self.lossless.interrupted.is_none() {
+                // What is on show still describes the player that stopped.
+                let place = self.soloist_place().or_else(|| self.lossless.place.take());
+                log::info!(
+                    "Soloist's receiver changed; holding its place: {:?}",
+                    place
+                        .as_ref()
+                        .map(|place| (place.position_ms, place.playing))
+                );
+                self.lossless.interrupted = place;
+            }
+            return;
+        }
+        if pid.is_some() && self.lossless.interrupted.is_none() {
+            if let Some(place) = self.soloist_place() {
+                self.lossless.place = Some(place);
+            }
+            return;
+        }
+        // Back, signed in and in this account: music that was playing
+        // carries on from where it stopped.
+        if let Some(at) = self.lossless.resume_at {
+            let wait = at.saturating_duration_since(Instant::now());
+            if !wait.is_zero() {
+                ctx.request_repaint_after(wait);
+                return;
+            }
+        }
+        if pid.is_some()
+            && self.backend.soloist().signed_in() == Some(true)
+            && self
+                .lossless
+                .interrupted
+                .as_ref()
+                .is_some_and(|place| place.playing)
+            && self.soloist_device_id().is_some()
+        {
+            self.resume_interrupted();
+        }
+    }
+
+    /// Where the playing Soloist is, when Soloist is what plays.
+    fn soloist_place(&self) -> Option<Place> {
+        let id = self.soloist_device_id()?;
+        if self.target() != Target::Remote(Some(id)) {
+            return None;
+        }
+        let now = self.now_playing().filter(|now| !now.local)?;
+        Some(Place {
+            uri: now.uri,
+            context: self.playing_context_uri(),
+            position_ms: now.position_ms,
+            playing: now.playing,
+        })
+    }
+
+    /// Plays what a stopped Soloist was playing, from where it was, on the
+    /// receiver that replaced it. `false` when nothing was held.
+    pub(super) fn resume_interrupted(&mut self) -> bool {
+        let Some(place) = self.lossless.interrupted.take() else {
+            return false;
+        };
+        let tries = self.lossless.resume_tries + 1;
+        self.lossless.resume_at = None;
+        let mut request = match place.context.clone() {
+            Some(context) => PlayRequest::context(context).starting_at_uri(place.uri.clone()),
+            None => PlayRequest::tracks(vec![place.uri.clone()]),
+        };
+        request.position_ms = place.position_ms;
+        log::info!(
+            "Resuming Soloist from {} ms (try {tries})",
+            place.position_ms
+        );
+        self.play_request(request, false);
+        // After the play: starting one clears what was held.
+        self.lossless.resuming = Some(place);
+        self.lossless.resume_tries = tries;
+        true
+    }
+
+    /// Spotify answers 404 to a play for a receiver that started a moment
+    /// ago, until its Connect service knows the new one. A refused resume is
+    /// tried again shortly, without a notice, until it has had its tries.
+    /// `true` when the refusal is taken care of here.
+    pub(super) fn retry_soloist_resume(&mut self) -> bool {
+        let Some(place) = self.lossless.resuming.take() else {
+            return false;
+        };
+        if self.lossless.resume_tries >= RESUME_TRIES {
+            self.lossless.resume_tries = 0;
+            return false;
+        }
+        // Play was pressed, or it was playing: either way it plays now.
+        self.lossless.interrupted = Some(Place {
+            playing: true,
+            ..place
+        });
+        self.lossless.resume_at = Some(Instant::now() + RESUME_RETRY);
+        true
+    }
+
+    /// A resume Spotify accepted: nothing is left to try again.
+    pub(super) fn soloist_resumed(&mut self) {
+        self.lossless.resuming = None;
+        self.lossless.resume_tries = 0;
     }
 
     pub(super) fn on_soloist_key_saved(&mut self, result: Result<(), String>) {

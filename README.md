@@ -39,7 +39,11 @@ short guide downloads Soloist from Spotify and stores your own Soloist key in
 the keyring. Pair it once by selecting it in Spotify's app on the same local
 network, using the same account as Spotifast. This computer stays one device,
 and the player bar shows the quality Spotify reports. Soloist's sound skips
-Spotifast's equalizer, and Spotify stops each build after 90 days. See
+Spotifast's equalizer, and Spotify stops each build after 90 days. Spotifast fetches the
+current build before then by itself. The current x86-64 build needs glibc 2.38
+or newer (Ubuntu 24.04, Debian 13, Fedora 42) and `libatomic.so.1`, which
+those distributions install with `libatomic1` or `libatomic`; the guide says
+when one is missing. See
 [Linux Soloist setup](docs/_reference/settings-and-files.md#linux-soloist-receiver-personal-fork).
 
 **Playback needs Spotify Premium.** Free accounts can browse and search, but

@@ -6709,6 +6709,8 @@ impl App {
                 match result {
                     Ok(devices) => {
                         self.devices = devices;
+                        #[cfg(target_os = "linux")]
+                        self.keep_soloist_row();
                         self.control_devices_stale = true;
                         if let Some((name, since)) = self.pending_transfer_to.clone() {
                             // The receiver's own id keeps another device of the
@@ -8228,6 +8230,15 @@ impl App {
                 ),
             },
             ApiResponse::Remote { action, result } => {
+                #[cfg(target_os = "linux")]
+                if action == RemoteAction::Play {
+                    match &result {
+                        Ok(()) => self.soloist_resumed(),
+                        // Kept as it was shown: it is tried again shortly.
+                        Err(_) if self.retry_soloist_resume() => return,
+                        Err(_) => {}
+                    }
+                }
                 if matches!(action, RemoteAction::Play | RemoteAction::Pause) {
                     self.clear_play_pending();
                 }
@@ -8954,6 +8965,12 @@ impl App {
     }
 
     fn start_play(&mut self, request: PlayRequest, shuffle_first: bool) {
+        // Whatever plays now replaces the place a stopped Soloist was at.
+        #[cfg(target_os = "linux")]
+        {
+            self.lossless.interrupted = None;
+            self.lossless.resuming = None;
+        }
         // Shuffle applies across contexts until disabled. A selected row still
         // starts first; otherwise choose a random starting track.
         let mut request = request;
@@ -9465,6 +9482,17 @@ impl App {
                     if !self.resume_last() {
                         self.toast(gettext(self.locale, "Pick a song, album, or playlist"));
                     }
+                    return;
+                }
+                // A Soloist that restarted has an empty player; play picks up
+                // where the one that stopped was rather than restarting it.
+                // Known by its id: Spotify may not list the new one yet.
+                #[cfg(target_os = "linux")]
+                if self.settings.lossless
+                    && self.backend.soloist().is_device(device_id.as_deref())
+                    && self.lossless.interrupted.is_some()
+                {
+                    self.resume_interrupted();
                     return;
                 }
                 self.set_play_pending(vec!["::toggle".into()]);
@@ -20843,6 +20871,363 @@ mod tests {
             "a refused key changes nothing"
         );
         app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_slow_build_or_a_locked_keyring_never_stops_a_running_soloist() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-unsettled");
+        soloist_ready(&mut app);
+        app.settings.lossless = true;
+        app.follow_lossless(&ctx);
+        assert_eq!(app.lossless.supervised, Some(true));
+        let mut read = app.lossless.status.clone().unwrap();
+        read.build = None;
+        read.build_error = Some(crate::soloist::BuildFailure {
+            message: "slow".into(),
+            slow: true,
+        });
+        read.key_saved = false;
+        read.keyring_error = Some(crate::credentials::Error::Locked);
+        app.on_soloist_status(read);
+        let status = app.lossless.status.as_ref().unwrap();
+        assert!(status.ready(), "the build and key it ran with are kept");
+        assert_eq!(app.lossless.supervised, Some(true), "nothing restarts");
+        assert!(
+            app.lossless.retry_at.is_some(),
+            "the slow build is read again"
+        );
+
+        let mut fresh = test_app("lossless-no-keyring");
+        fresh.on_soloist_status(crate::soloist::Status {
+            keyring_error: Some(crate::credentials::Error::Unavailable),
+            ..Default::default()
+        });
+        let first = fresh.lossless.retry_at.unwrap();
+        assert!(!fresh.lossless.status.as_ref().unwrap().key_saved);
+        fresh.on_soloist_status(crate::soloist::Status {
+            keyring_error: Some(crate::credentials::Error::Unavailable),
+            ..Default::default()
+        });
+        assert!(
+            fresh.lossless.retry_at.unwrap() > first + Duration::from_secs(4),
+            "it backs off"
+        );
+        fresh.on_soloist_status(crate::soloist::Status {
+            keyring_error: Some(crate::credentials::Error::Locked),
+            ..Default::default()
+        });
+        assert_eq!(
+            fresh.lossless.retry_at, None,
+            "a locked keyring is not prompted again"
+        );
+        app.backend.shutdown();
+        fresh.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn soloist_is_caught_from_the_connect_cluster_and_its_own_feed() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-cluster");
+        app.local_ready = true;
+        app.local_device_id = Some("local".into());
+        soloist_ready(&mut app);
+        let id = "cluster-only-soloist";
+        app.lossless.status.as_mut().unwrap().device_id = Some(id.into());
+        app.devices.clear();
+        app.settings.lossless = true;
+        assert_eq!(app.soloist_device_id(), None, "not in this account yet");
+
+        let mut cluster = librespot_protocol::connect::Cluster::default();
+        cluster.device.insert(id.into(), Default::default());
+        crate::quality::note(crate::quality::current(), &cluster);
+        assert_eq!(
+            app.soloist_device_id().as_deref(),
+            Some(id),
+            "no device list needed"
+        );
+        app.follow_lossless(&ctx);
+        assert_eq!(app.target(), Target::Remote(Some(id.into())));
+
+        // A device list read before Soloist joined keeps its row and choice.
+        app.selected_device = Some(id.into());
+        app.handle_api(ApiResponse::Devices(Ok(vec![Device {
+            id: Some("phone".into()),
+            name: "Phone".into(),
+            ..Default::default()
+        }])));
+        assert_eq!(app.selected_device.as_deref(), Some(id));
+        assert!(
+            app.devices
+                .iter()
+                .any(|device| device.id.as_deref() == Some(id))
+        );
+
+        app.backend.soloist().assume_signed_in(Some(false));
+        assert_eq!(
+            app.soloist_device_id(),
+            None,
+            "its own feed says it signed out"
+        );
+        app.handle_api(ApiResponse::Devices(Ok(Vec::new())));
+        assert!(app.devices.is_empty(), "its row is no longer held");
+        assert_eq!(app.selected_device, None);
+        assert_eq!(app.target(), Target::Local);
+        app.backend.soloist().assume_signed_in(None);
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn soloist_playing(app: &mut App, playing: bool) {
+        app.remote = Some(RemoteSnapshot {
+            state: PlaybackState {
+                device: Some(Device {
+                    id: Some("soloist".into()),
+                    is_active: true,
+                    ..Default::default()
+                }),
+                item: Some(PlayableItem::Track(crate::api::models::Track {
+                    uri: "spotify:track:lucky".into(),
+                    duration_ms: 369_000,
+                    ..Default::default()
+                })),
+                context: Some(crate::api::models::Context {
+                    uri: "spotify:album:ram".into(),
+                    kind: "album".into(),
+                }),
+                progress_ms: Some(40_000),
+                is_playing: playing,
+                ..Default::default()
+            },
+            received_at: Instant::now(),
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    fn resumed_at(app: &App) -> Option<(String, u32)> {
+        app.backend
+            .take_remote_play_requests()
+            .into_iter()
+            .find_map(|request| match request {
+                ApiRequest::Remote {
+                    play: Some(play),
+                    device_id,
+                    ..
+                } => Some((device_id?, play.position_ms)),
+                _ => None,
+            })
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_paused_soloist_that_restarted_resumes_where_it_was_not_from_the_start() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-paused-restart");
+        app.local_ready = true;
+        app.local_device_id = Some("local".into());
+        soloist_ready(&mut app);
+        app.settings.lossless = true;
+        app.backend.soloist().assume_device_id("soloist");
+        app.backend.soloist().assume_pid(Some(10));
+        soloist_playing(&mut app, false);
+        app.follow_lossless(&ctx);
+        app.follow_lossless(&ctx);
+        // The receiver is killed and a new one takes its place.
+        app.backend.soloist().assume_pid(None);
+        app.follow_lossless(&ctx);
+        app.backend.soloist().assume_pid(Some(11));
+        app.backend.soloist().assume_signed_in(Some(true));
+        app.follow_lossless(&ctx);
+        assert_eq!(resumed_at(&app), None, "paused music waits for play");
+        app.toggle_play();
+        let (device, position) = resumed_at(&app).expect("a play from the held place");
+        assert_eq!(device, "soloist");
+        assert_eq!(position, 40_000, "not from the start of the song");
+        assert!(app.lossless.interrupted.is_none());
+        app.backend.soloist().assume_signed_in(None);
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn play_pressed_before_spotify_lists_the_new_soloist_still_resumes_its_place() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-early-play");
+        app.local_ready = true;
+        app.local_device_id = Some("local".into());
+        soloist_ready(&mut app);
+        app.settings.lossless = true;
+        app.backend.soloist().assume_device_id("soloist");
+        app.backend.soloist().assume_pid(Some(30));
+        soloist_playing(&mut app, false);
+        app.follow_lossless(&ctx);
+        app.follow_lossless(&ctx);
+        app.backend.soloist().assume_pid(Some(31));
+        app.follow_lossless(&ctx);
+        // Spotify's device list, read while the receiver was down, leaves
+        // it out; the new one's feed shows an older state Spotify restored.
+        app.handle_api(ApiResponse::Devices(Ok(Vec::new())));
+        assert_eq!(app.soloist_device_id(), None);
+        soloist_playing(&mut app, false);
+        if let Some(remote) = app.remote.as_mut() {
+            remote.state.item = Some(PlayableItem::Track(crate::api::models::Track {
+                uri: "spotify:track:restored-by-spotify".into(),
+                ..Default::default()
+            }));
+        }
+        app.toggle_play();
+        let (device, position) = resumed_at(&app).expect("the held place, not a plain resume");
+        assert_eq!(device, "soloist");
+        assert_eq!(position, 40_000);
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_playing_soloist_that_restarted_carries_on_once_it_is_back() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-playing-restart");
+        app.local_ready = true;
+        app.local_device_id = Some("local".into());
+        soloist_ready(&mut app);
+        app.settings.lossless = true;
+        app.backend.soloist().assume_device_id("soloist");
+        app.backend.soloist().assume_pid(Some(20));
+        soloist_playing(&mut app, true);
+        app.follow_lossless(&ctx);
+        app.follow_lossless(&ctx);
+        app.backend.soloist().assume_pid(Some(21));
+        app.follow_lossless(&ctx);
+        assert!(app.lossless.interrupted.is_some());
+        app.follow_lossless(&ctx);
+        assert_eq!(resumed_at(&app), None, "not before it has signed in");
+        app.backend.soloist().assume_signed_in(Some(true));
+        app.follow_lossless(&ctx);
+        let (device, position) = resumed_at(&app).expect("it carries on by itself");
+        assert_eq!(device, "soloist");
+        assert!(position >= 40_000, "{position}");
+        app.follow_lossless(&ctx);
+        assert_eq!(resumed_at(&app), None, "once");
+
+        // Spotify does not know the new receiver yet: it is tried again
+        // quietly, from the same place, rather than shown as a failure.
+        let refused = || ApiResponse::Remote {
+            action: RemoteAction::Play,
+            result: Err(crate::api::ApiError::Status {
+                status: 404,
+                message: "Requested entity was not found".into(),
+            }),
+        };
+        app.handle_api(refused());
+        assert!(app.toasts.is_empty(), "no notice while it is retried");
+        app.follow_lossless(&ctx);
+        assert_eq!(resumed_at(&app), None, "not before the retry delay");
+        app.lossless.resume_at = Some(Instant::now());
+        app.follow_lossless(&ctx);
+        let (_, again) = resumed_at(&app).expect("tried again");
+        assert_eq!(again, position, "from the same place");
+        app.handle_api(ApiResponse::Remote {
+            action: RemoteAction::Play,
+            result: Ok(()),
+        });
+        assert!(app.lossless.resuming.is_none());
+        assert!(app.lossless.interrupted.is_none());
+
+        // A resume that keeps being refused is shown after its last try.
+        app.backend.soloist().assume_pid(Some(22));
+        app.follow_lossless(&ctx);
+        app.follow_lossless(&ctx);
+        for _ in 0..5 {
+            app.lossless.resume_at = Some(Instant::now());
+            app.follow_lossless(&ctx);
+            assert!(resumed_at(&app).is_some());
+            app.handle_api(refused());
+        }
+        assert_eq!(app.toasts.len(), 1, "the refusal after the last try");
+        app.backend.soloist().assume_signed_in(None);
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn spotifast_fetches_the_current_build_once_before_spotify_stops_this_one() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-auto-update");
+        soloist_ready(&mut app);
+        app.settings.lossless = true;
+        let status = app.lossless.status.as_mut().unwrap();
+        status.config = Some(crate::soloist::Config {
+            binary: "/opt/soloist/soloist".into(),
+            data_dir: "/opt/soloist/session".into(),
+            device_name: "Desk Lossless".into(),
+        });
+        status.build.as_mut().unwrap().expires = jiff::Zoned::now()
+            .date()
+            .checked_add(jiff::Span::new().days(5))
+            .unwrap();
+        app.follow_lossless(&ctx);
+        assert!(app.lossless.installing, "it updates without being asked");
+        assert!(app.toasts.is_empty(), "and without a notice");
+        app.follow_lossless(&ctx);
+        app.on_soloist_installed(Ok(app
+            .lossless
+            .status
+            .as_ref()
+            .unwrap()
+            .build
+            .clone()
+            .unwrap()));
+        assert!(!app.lossless.installing);
+        app.follow_lossless(&ctx);
+        assert!(!app.lossless.installing, "once a run");
+        assert!(
+            app.toasts.is_empty(),
+            "not before the new build's date has been read"
+        );
+        let unchanged = app.lossless.status.clone().unwrap();
+        app.on_soloist_status(unchanged);
+        app.follow_lossless(&ctx);
+        assert_eq!(
+            app.toasts.len(),
+            1,
+            "Spotify had nothing newer, so the listener hears about it"
+        );
+
+        // A download that fails, as when Spotify's CDN cannot be reached,
+        // says so at once and is tried again later in the run.
+        let mut offline = test_app("lossless-update-offline");
+        soloist_ready(&mut offline);
+        offline.settings.lossless = true;
+        offline.lossless.status = app.lossless.status.clone();
+        offline.follow_lossless(&ctx);
+        assert!(offline.lossless.installing);
+        offline.on_soloist_installed(Err("Couldn't download Soloist from Spotify.".into()));
+        offline.follow_lossless(&ctx);
+        assert!(!offline.lossless.installing, "not again at once");
+        assert_eq!(offline.toasts.len(), 1, "the notice says to update");
+        offline.lossless.auto_update_at = Some(Instant::now());
+        offline.follow_lossless(&ctx);
+        assert!(offline.lossless.installing, "tried again later");
+        offline.on_soloist_installed(Err("Couldn't download Soloist from Spotify.".into()));
+        offline.follow_lossless(&ctx);
+        assert_eq!(offline.toasts.len(), 1, "the notice is not repeated");
+        offline.backend.shutdown();
+
+        // Spotify can stop a build early; that is fetched at once too.
+        let mut early = test_app("lossless-stopped-early");
+        soloist_ready(&mut early);
+        early.settings.lossless = true;
+        early.lossless.status.as_mut().unwrap().config =
+            app.lossless.status.as_ref().unwrap().config.clone();
+        early.follow_lossless(&ctx);
+        assert!(!early.lossless.installing, "a build with time left stays");
+        early.backend.soloist().assume_expired();
+        early.follow_lossless(&ctx);
+        assert!(early.lossless.installing);
+        app.backend.shutdown();
+        early.backend.shutdown();
     }
 
     #[cfg(target_os = "linux")]

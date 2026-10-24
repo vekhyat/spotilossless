@@ -76,6 +76,8 @@ pub struct Reported {
 pub struct State {
     reported: Option<Reported>,
     lossless: std::collections::BTreeSet<String>,
+    /// Every device the cluster lists: those signed in to this account.
+    devices: std::collections::BTreeSet<String>,
 }
 
 /// Shared between the session's task and the interface.
@@ -177,7 +179,18 @@ pub fn note(shared: &Shared, cluster: &Cluster) {
             log::info!("devices that can play lossless: {}", lossless.len());
             state.lossless = lossless;
         }
+        state.devices = cluster.device.keys().cloned().collect();
     }
+}
+
+/// Whether the session's last cluster lists `device_id`, so it is signed in
+/// to this account. Pushed by Spotify, so it needs no Web API read.
+pub fn in_account(shared: &Shared, device_id: &str) -> bool {
+    shared
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .devices
+        .contains(device_id)
 }
 
 /// Whether `device_id` said it can play lossless.
@@ -288,6 +301,15 @@ mod tests {
             .device
             .insert("spotifast".into(), device(false, AudioQuality::VERY_HIGH));
         cluster.device.insert("phone".into(), DeviceInfo::default());
+        let shared = Shared::default();
+        note(&shared, &cluster);
+        assert!(in_account(&shared, "phone"), "any device the cluster lists");
+        assert!(!in_account(&shared, "elsewhere"));
+        note(&shared, &Cluster::default());
+        assert!(
+            in_account(&shared, "phone"),
+            "an update without devices keeps them"
+        );
         assert_eq!(
             lossless_devices(&cluster).into_iter().collect::<Vec<_>>(),
             ["soloist", "speaker"]

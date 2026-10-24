@@ -26,6 +26,8 @@ struct Parser {
     auth_seen: bool,
     logged_in: bool,
     timestamp: u64,
+    /// The volume Soloist last reported, 0 to 100.
+    volume: Option<u8>,
 }
 
 impl Parser {
@@ -34,6 +36,9 @@ impl Parser {
             return None;
         }
         let event: Value = serde_json::from_str(line.get(line.find('{')?..)?).ok()?;
+        if let Some(volume) = event["volume"].as_u64() {
+            self.volume = Some(volume.min(100) as u8);
+        }
         match event["type"].as_str()? {
             "auth_state" => {
                 self.auth_seen = true;
@@ -276,6 +281,9 @@ async fn trace(
         if parser.auth_seen {
             snapshot.signed_in = Some(parser.logged_in);
         }
+        if parser.volume.is_some() {
+            snapshot.volume = parser.volume;
+        }
     }
     handle
         .0
@@ -329,6 +337,18 @@ mod tests {
             "context":{"uri":"spotify:playlist:blend"}, "volume":42,
             "options":{"shuffle":true,"repeat":"context"},"available_actions":{"set_volume":{}}
         })
+    }
+
+    #[test]
+    fn the_volume_soloist_reports_is_remembered_from_any_event() {
+        let mut parser = parser();
+        assert_eq!(parser.volume, None);
+        parser.read(&event().to_string(), 2000);
+        assert_eq!(parser.volume, Some(42));
+        parser.read(r#"{"type":"volume_changed","volume":87}"#, 0);
+        assert_eq!(parser.volume, Some(87));
+        parser.read(r#"{"type":"volume_changed","volume":900}"#, 0);
+        assert_eq!(parser.volume, Some(100));
     }
 
     #[test]

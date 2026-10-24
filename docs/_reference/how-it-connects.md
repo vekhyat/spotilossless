@@ -481,7 +481,12 @@ on request. The listener pairs it once by selecting it in Spotify's app on
 the same local network, with the account used in Spotifast. The guide waits
 for Soloist's id to appear in that account; it does not send the playback
 credential through `addUser`, whose accepted reply does not sign Soloist in.
-Soloist restores the saved session on later starts. While its local WebSocket trace is live,
+Spotify's device-token exchange also refuses Soloist's client, so a Spotify
+app has to make that one pairing. Soloist restores the saved session on later starts.
+Spotifast then finds it without the Web API: Soloist counts as this account's
+once the playback session's Connect cluster lists its id (or the device list
+does), and its local trace says at once when it signs in or out. A device
+list read that leaves it out does not remove its row or the choice of it. While its local WebSocket trace is live,
 now-playing updates and player-state polls use that feed rather than the Web
 API. The receiver's id must match one device in the signed-in playback
 session. See [Soloist setup](/settings-and-files/#linux-soloist-receiver-personal-fork)

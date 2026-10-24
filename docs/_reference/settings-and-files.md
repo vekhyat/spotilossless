@@ -680,6 +680,20 @@ Spotifast does not bundle or mirror Soloist, fetch lossless streams itself, or
 change librespot's decoder. Spotify lists Soloist builds for Linux, macOS and
 Windows; this fork runs it on Linux only.
 
+### What Soloist needs
+
+Spotify builds Soloist for x86-64, 64-bit ARM and 32-bit ARM Linux. Build
+1.3.10 for x86-64 needs glibc 2.38 or newer, so it does not run on Ubuntu 22.04
+or Debian 12. It also needs `libatomic.so.1`, which clean installs of Ubuntu
+24.04, Debian 13 and Fedora 42 all leave out: install `libatomic1` (Debian,
+Ubuntu) or `libatomic` (Fedora). When a download cannot run, the guide says
+what is missing, or that the download is for another processor. The loader
+stops at the first library it lacks, so Spotifast also compares the glibc
+version the binary asks for with the system's, and a system that is too old
+hears that at once rather than after installing libatomic. `tar` unpacks the
+archive. The key needs a running Secret Service keyring, such as GNOME Keyring
+or KWallet.
+
 ### Turning it on
 
 Open **Settings > Playback > Audio quality** and choose **Lossless**. The first
@@ -706,14 +720,20 @@ time, a guide opens with three steps, each showing what is already done:
 
 Spotifast's reusable playback credential cannot pair Soloist. A successful
 `addUser` reply does not mean Soloist has signed in, so the guide never sends
-that credential or reports success from that reply. If pairing has not
+that credential or reports success from that reply. Spotify also refuses
+Spotifast a token for Soloist's client, so this one pairing has to come from a
+Spotify app. After it, Spotifast finds and uses Soloist on its own. If pairing has not
 finished after 90 seconds, the guide points back to Spotify's device picker
 and asks you to check the account and local network. A wait expiring does not
 prove the Soloist key is wrong. Pairing can still finish after that wait.
 
 Soloist is identified by the UUID it writes to `.device_id` in its data
 directory. A device in the account with the same name is never treated as
-Soloist. While waiting for pairing, this computer's receiver is folded into
+Soloist. It counts as joined once Spotify places that id in this account,
+through the Connect cluster the playback session receives or the Web API's
+device list, whichever comes first. Its local WebSocket trace overrides both:
+when Soloist says it has signed out, music stays on librespot at once. A
+device list read that leaves Soloist out keeps its row and the choice of it. While waiting for pairing, this computer's receiver is folded into
 the existing **(this computer)** row, which opens the setup guide.
 
 Choosing **Lossless** again later opens the guide to update or reconnect
@@ -745,13 +765,37 @@ settles, and the receiver is told to keep the chosen playing or paused state.
 This relies on the source device publishing a valid Connect context and queue;
 Spotifast cannot recover context pages that librespot has already lost.
 
-### Build expiry
+### Build expiry and restarts
 
-Spotify stops each build 90 days after its build date (exit code 10).
-Spotifast reads the date from `soloist --version`. From 14 days before, it
-shows a notice once per run, and the guide offers **Update**. If a build has
-already stopped, the supervisor reports it and music plays on librespot until
-the update.
+Spotify stops each build 90 days after its build date, and can stop one sooner;
+a stopped build exits with code 10. Spotifast reads the date from
+`soloist --version`, allowing it 20 seconds for slow disks. A build that
+answered before and is only slow this time keeps playing, and the guide reads
+it again later.
+
+While Lossless is on, Spotifast fetches Spotify's current build by itself once
+the installed one is within 14 days of its date, or at once when Spotify stops
+it early. The update keeps the paired session and name, and restarts Soloist on
+the new build. A download that succeeds happens once per run, so a build Spotify has
+not replaced yet is not downloaded over and over. One that fails, as when
+Spotify's CDN cannot be reached, is tried again every 15 minutes. Either way,
+a build that is still about to stop brings one notice, and the guide offers
+**Update**. Until a working build runs, music plays on librespot.
+
+If Soloist stops for any other reason, Spotifast says so without blaming the
+build and starts it again. Soloist keeps no place in the music across a
+restart, so Spotifast remembers the song, its context and the position, and
+starts the new receiver at the volume the old one last reported. Music that
+was playing carries on there once the new receiver has signed in; music that
+was paused resumes there at the next press of play. Spotify refuses a play for
+a receiver it has not registered yet, so a refused resume is tried again every
+two seconds, five times, before the refusal is shown.
+
+The key is read from Secret Service when the receiver starts. If no keyring is
+running yet, as at some logins, Spotifast asks again after a growing delay of
+up to two minutes. A locked keyring, or one that refused, is not asked again
+until Lossless is chosen again, so its unlock prompt does not repeat. A keyring
+that locks while Soloist plays does not stop it.
 
 While Soloist is active, its local WebSocket events update the song, position,
 play/pause, volume, shuffle and repeat immediately, even during a Web API rate

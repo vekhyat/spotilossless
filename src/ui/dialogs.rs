@@ -336,6 +336,12 @@ fn lossless_steps(app: &mut App, ui: &mut egui::Ui) {
     }
     if let Some(error) = &app.lossless.install_error {
         paragraph(ui, error, palette.danger);
+    } else if let Some(failure) = status
+        .build_error
+        .as_ref()
+        .filter(|_| status.build.is_none())
+    {
+        paragraph(ui, &failure.message, palette.danger);
     }
 
     heading(ui, &gettext(locale, "2. Add your Soloist key"));
@@ -400,6 +406,8 @@ fn lossless_steps(app: &mut App, ui: &mut egui::Ui) {
     );
     if let Some(error) = &app.lossless.key_error {
         paragraph(ui, error, palette.danger);
+    } else if let Some(error) = status.keyring_error.filter(|_| !status.key_saved) {
+        paragraph(ui, crate::soloist::keyring_message(error), palette.danger);
     }
 
     heading(ui, &gettext(locale, "3. Connect it to your account"));
