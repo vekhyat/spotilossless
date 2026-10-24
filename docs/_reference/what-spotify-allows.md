@@ -208,7 +208,9 @@ The Web API and librespot do not provide these features:
   Spotify Connect, but Spotify ships it only for Linux and does not allow apps
   to bundle it. Each listener would need their own developer key and pairing,
   builds stop working after 90 days, and it has no API for the library,
-  playlists or search, and no way to feed the equalizer and visualisers.
+  playlists or search. The personal fork can
+  [capture its PipeWire output for visualisers](/soloist-tap/), with volume
+  limitations, but the output still bypasses Spotifast's equalizer.
   Spotifast will reconsider it if Spotify offers a supported desktop path.
   See [issue #965](https://github.com/crmne/spotifast/issues/965).
 - **Local files from Spotify's Local Files playlist.** librespot cannot play
