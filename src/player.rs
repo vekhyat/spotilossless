@@ -442,6 +442,7 @@ impl Engine {
         )
         .await
         .context("unable to connect to Spotify")?;
+        crate::quality::watch(&session, crate::quality::current());
         if carrying {
             // Before Spirc's task runs, so everything it loads comes through
             // the new session. The song already playing keeps fetching the

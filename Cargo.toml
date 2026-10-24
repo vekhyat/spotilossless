@@ -138,6 +138,10 @@ librespot-metadata = { version = "0.8", default-features = false }
 librespot-protocol = { version = "0.8", default-features = false }
 # Parses the rootlist's playlist4 protobuf, the same crate librespot generates with.
 protobuf = "3"
+# Reads the Connect cluster updates librespot's session already receives, for
+# the playback quality the active device reports (src/quality.rs). librespot
+# compiles this version already.
+futures-util = { version = "0.3", default-features = false }
 # Reads a local file's embedded cover and lyrics. The same decoder librespot
 # already plays local files with, with the formats it enables, so nothing
 # new is built.

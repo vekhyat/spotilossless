@@ -530,11 +530,14 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                 } else {
                                     device.name.clone()
                                 };
-                                #[cfg(target_os = "linux")]
-                                let name = if app.backend.soloist().matches_device(&device.name) {
-                                    format!("{name} · {}", gettext(locale, "Lossless"))
-                                } else {
-                                    name
+                                // The quality the device itself reports, never a guess from its name.
+                                let name = match active
+                                    .then(|| app.reported_quality())
+                                    .flatten()
+                                    .and_then(|reported| reported.level.label(locale))
+                                {
+                                    Some(level) => format!("{name} · {level}"),
+                                    None => name,
                                 };
                                 let (rect, response) = ui.allocate_exact_size(
                                     vec2(ui.available_width(), 52.0),

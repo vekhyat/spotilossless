@@ -13609,6 +13609,25 @@ impl App {
 }
 
 impl App {
+    /// The quality the chosen remote device reports for what it plays, from
+    /// Spotify's Connect cluster. `None` on this computer, before a report,
+    /// and when the report belongs to another device.
+    pub fn reported_quality(&self) -> Option<crate::quality::Reported> {
+        let Target::Remote(id) = self.target() else {
+            return None;
+        };
+        let id = id.or_else(|| {
+            self.remote_fresh()?
+                .state
+                .device
+                .as_ref()
+                .filter(|device| device.is_active)?
+                .id
+                .clone()
+        })?;
+        crate::quality::for_device(crate::quality::current(), &id)
+    }
+
     /// Whether the visualisers have sound to show: the song playing on this
     /// computer, or Soloist's output while it is captured.
     pub fn vis_sounding(&self, now: Option<&NowPlaying>) -> bool {

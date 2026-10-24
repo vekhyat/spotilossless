@@ -517,7 +517,16 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
         );
         title.size().x.max(subtitle.size().x).min(text_width)
     };
-    let info_rect = Rect::from_min_size(pos2(text_left, cy - 18.0), vec2(text_width, 36.0));
+    // A lossless report from the device that plays gets a third line, as in
+    // Spotify's own player bar.
+    let quality = app
+        .reported_quality()
+        .filter(|reported| reported.level.is_lossless());
+    let info_rect = if quality.is_some() {
+        Rect::from_min_size(pos2(text_left, cy - 25.0), vec2(text_width, 50.0))
+    } else {
+        Rect::from_min_size(pos2(text_left, cy - 18.0), vec2(text_width, 36.0))
+    };
 
     let mut text_ui = ui.new_child(
         UiBuilder::new()
@@ -567,6 +576,13 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
             }
         }
     });
+    if let Some(level) = quality.and_then(|reported| reported.level.label(app.locale)) {
+        theme::text(&mut text_ui, &level, theme::medium(11.0), palette.accent).on_hover_text(
+            // Translators: {level} is an audio quality, such as "Lossless 24-bit".
+            gettext(app.locale, "Spotify reports {level} on this device")
+                .replace("{level}", &level),
+        );
+    }
     if responses
         .iter()
         .any(|response| response.drag_started_by(egui::PointerButton::Primary))
