@@ -807,6 +807,9 @@ pub struct App {
     /// follows, while Soloist is the chosen Connect output.
     #[cfg(target_os = "linux")]
     soloist_tap: Option<(u32, crate::soloist_tap::SoloistTap)>,
+    /// The Lossless setup guide and the receiver it keeps running.
+    #[cfg(target_os = "linux")]
+    pub lossless: lossless::LosslessSetup,
     /// The window's pixels per point when it last drew, so artwork chosen
     /// away from the drawing code fits the display it lands on.
     pub pixels_per_point: f32,
@@ -1336,6 +1339,8 @@ impl App {
             player_bar_analyser: crate::vis::WideAnalyser::default(),
             #[cfg(target_os = "linux")]
             soloist_tap: None,
+            #[cfg(target_os = "linux")]
+            lossless: Default::default(),
             pixels_per_point: 1.0,
         };
         app.local.volume = app.settings.volume;
@@ -1713,6 +1718,12 @@ impl App {
             if !is_local && (remote.state.is_playing || remote.state.item.is_some()) {
                 return Target::Remote(device.and_then(|device| device.id.clone()));
             }
+        }
+        #[cfg(target_os = "linux")]
+        if self.local_ready
+            && let Some(device_id) = self.lossless_device()
+        {
+            return Target::Remote(Some(device_id));
         }
         if self.local_ready {
             Target::Local
@@ -2549,6 +2560,12 @@ impl App {
                 }
                 Event::Local(state) => self.handle_local(*state),
                 Event::Api(response) => self.handle_api(*response),
+                #[cfg(target_os = "linux")]
+                Event::SoloistStatus(status) => self.on_soloist_status(*status),
+                #[cfg(target_os = "linux")]
+                Event::SoloistInstalled(result) => self.on_soloist_installed(result),
+                #[cfg(target_os = "linux")]
+                Event::SoloistKeySaved(result) => self.on_soloist_key_saved(result),
                 #[cfg(target_os = "linux")]
                 Event::SoloistPlayback { state, received_at } => {
                     self.handle_soloist_playback(*state, received_at)
@@ -3753,7 +3770,10 @@ impl App {
     fn tick(&mut self, ctx: &egui::Context) {
         self.poll_custom_themes(ctx);
         #[cfg(target_os = "linux")]
-        self.follow_soloist_tap();
+        {
+            self.follow_lossless(ctx);
+            self.follow_soloist_tap();
+        }
         if let Some(wait) = self.window_focus(ctx.input(|input| {
             // A minimised window is away even where it keeps focus.
             let viewport = input.viewport();
@@ -6751,10 +6771,9 @@ impl App {
                 self.remote_poll_pending = false;
                 #[cfg(target_os = "linux")]
                 if let Ok(Some(state)) = &result
-                    && state
-                        .device
-                        .as_ref()
-                        .is_some_and(|device| self.backend.soloist().matches_device(&device.name))
+                    && state.device.as_ref().is_some_and(|device| {
+                        self.backend.soloist().is_device(device.id.as_deref())
+                    })
                 {
                     if self.soloist_state_stale(state, Instant::now()) {
                         self.poll_remote_soon();
@@ -9649,6 +9668,15 @@ impl App {
     }
 
     fn transfer(&mut self, device_id: String) {
+        // With Lossless on, this computer is Soloist.
+        #[cfg(target_os = "linux")]
+        if Some(device_id.as_str()) == self.local_device_id.as_deref()
+            && let Some(soloist) = self.lossless_device()
+        {
+            let play = self.now_playing().is_some_and(|now| now.playing);
+            self.show_devices = false;
+            return self.transfer_remote(soloist, play);
+        }
         if Some(device_id.as_str()) == self.local_device_id.as_deref() {
             self.selected_device = None;
             self.show_devices = false;
@@ -11317,6 +11345,17 @@ impl App {
             }
             Action::ActivateReceiver(receiver) => {
                 self.audio_key_banner = false;
+                #[cfg(target_os = "linux")]
+                if self
+                    .lossless
+                    .status
+                    .as_ref()
+                    .is_some_and(|status| status.is_own_receiver(&receiver))
+                {
+                    self.dialog = Some(Dialog::LosslessSetup);
+                    self.choose_lossless();
+                    return;
+                }
                 if self.activating_receiver.is_none() {
                     if let Some(key) = receiver.preference_key() {
                         self.remember_device_choice(&key);
@@ -11326,6 +11365,12 @@ impl App {
                     self.backend.send(Command::ActivateReceiver(receiver));
                 }
             }
+            #[cfg(target_os = "linux")]
+            Action::ChooseLossless => self.choose_lossless(),
+            #[cfg(target_os = "linux")]
+            Action::InstallSoloist => self.install_soloist(),
+            #[cfg(target_os = "linux")]
+            Action::SaveSoloistKey => self.save_soloist_key(),
             Action::RefreshDevices => {
                 self.devices_fetched_at = None;
                 self.refresh_devices();
@@ -13629,7 +13674,7 @@ impl App {
                 .or_else(|| remote.filter(|device| device.id.as_deref() == Some(id))),
             None => remote.filter(|device| device.is_active),
         };
-        device.is_some_and(|device| self.backend.soloist().matches_device(&device.name))
+        device.is_some_and(|device| self.backend.soloist().is_device(device.id.as_deref()))
     }
 
     /// Captures Soloist's output into the visualisers' tap while it is the
@@ -13728,6 +13773,8 @@ impl App {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub mod lossless;
 mod radio;
 
 #[cfg(test)]
@@ -20478,6 +20525,362 @@ mod tests {
         );
     }
 
+    /// Another device with Soloist's display name is an ordinary device: no
+    /// Soloist stale-state filtering and no local capture.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_device_named_like_soloist_is_not_soloist() {
+        let mut app = test_app("soloist-namesake");
+        app.backend.soloist().assume_device_id("soloist");
+        app.local_ready = true;
+        let state = |id: &str, uri: &str| PlaybackState {
+            device: Some(Device {
+                id: Some(id.into()),
+                name: "Spotilossless Soloist".into(),
+                is_active: true,
+                ..Default::default()
+            }),
+            item: Some(queued_song(uri)),
+            is_playing: true,
+            ..Default::default()
+        };
+        app.devices = vec![
+            state("phone", "spotify:track:a").device.unwrap(),
+            state("soloist", "spotify:track:a").device.unwrap(),
+        ];
+        app.selected_device = Some("phone".into());
+        assert!(!app.soloist_active(), "no capture for a namesake");
+        app.selected_device = Some("soloist".into());
+        assert!(app.soloist_active());
+
+        // A pending local handoff makes every Soloist report stale.
+        app.local_transfer_sequence = Some(app.local.track_sequence);
+        app.selected_device = Some("phone".into());
+        app.handle_api(ApiResponse::PlaybackState {
+            seq: app.remote_poll_seq,
+            result: Ok(Some(state("phone", "spotify:track:phone"))),
+        });
+        assert_eq!(
+            app.remote
+                .as_ref()
+                .and_then(|remote| remote.state.item.as_ref())
+                .map(PlayableItem::uri),
+            Some("spotify:track:phone"),
+            "the namesake's report is taken as it is"
+        );
+        app.selected_device = Some("soloist".into());
+        app.handle_api(ApiResponse::PlaybackState {
+            seq: app.remote_poll_seq,
+            result: Ok(Some(state("soloist", "spotify:track:stale"))),
+        });
+        assert_eq!(
+            app.remote
+                .as_ref()
+                .and_then(|remote| remote.state.item.as_ref())
+                .map(PlayableItem::uri),
+            Some("spotify:track:phone"),
+            "Soloist's own report is held back as stale"
+        );
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn soloist_ready(app: &mut App) {
+        app.lossless.status = Some(crate::soloist::Status {
+            build: Some(crate::soloist::Build {
+                version: "1.3.10".into(),
+                expires: jiff::civil::date(2099, 1, 1),
+            }),
+            key_saved: true,
+            device_id: Some("soloist".into()),
+            ..Default::default()
+        });
+        app.devices = vec![Device {
+            id: Some("soloist".into()),
+            name: "Spotilossless Soloist".into(),
+            is_restricted: true,
+            kind: "computer".into(),
+            ..Default::default()
+        }];
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn lossless_makes_soloist_this_computer_only_once_it_is_set_up_and_signed_in() {
+        let mut app = test_app("lossless-target");
+        app.local_ready = true;
+        app.local_device_id = Some("local".into());
+        soloist_ready(&mut app);
+        assert_eq!(app.target(), Target::Local, "Lossless is off by default");
+        app.settings.lossless = true;
+        assert_eq!(app.target(), Target::Remote(Some("soloist".into())));
+        app.transfer("local".into());
+        assert!(matches!(
+            app.backend.take_transfer_requests().as_slice(),
+            [ApiRequest::Transfer { device_id, .. }] if device_id == "soloist"
+        ));
+        app.selected_device = None;
+        app.lossless.status.as_mut().unwrap().key_saved = false;
+        assert_eq!(app.target(), Target::Local, "no key: librespot plays");
+        soloist_ready(&mut app);
+        app.devices.clear();
+        assert_eq!(
+            app.target(),
+            Target::Local,
+            "not signed in yet: librespot plays"
+        );
+        app.devices = vec![Device {
+            id: Some("impostor".into()),
+            name: "Spotilossless Soloist".into(),
+            ..Default::default()
+        }];
+        assert_eq!(app.soloist_device_id(), None, "a name is not an identity");
+        assert_eq!(app.target(), Target::Local);
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn soloist_status_is_read_once_at_a_time_however_many_frames_ask() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-status-once");
+        for _ in 0..3 {
+            app.follow_lossless(&ctx);
+        }
+        assert!(app.lossless.status_requested);
+        assert!(
+            !app.lossless.status_again,
+            "frames waiting do not queue reads"
+        );
+        app.apply(Action::InstallSoloist, &ctx);
+        app.on_soloist_installed(Ok(crate::soloist::Build {
+            version: "2".into(),
+            expires: jiff::civil::date(2099, 1, 1),
+        }));
+        assert!(
+            app.lossless.status_again,
+            "an install reads again after the read in flight"
+        );
+        app.on_soloist_status(Default::default());
+        assert!(app.lossless.status_requested && !app.lossless.status_again);
+        app.on_soloist_status(Default::default());
+        assert!(!app.lossless.status_requested);
+        app.follow_lossless(&ctx);
+        assert!(
+            !app.lossless.status_requested,
+            "a known status is not read every frame"
+        );
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn choosing_lossless_before_setup_opens_the_guide_without_turning_it_on() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-guide");
+        app.lossless.status = Some(Default::default());
+        app.apply(Action::ChooseLossless, &ctx);
+        assert!(matches!(app.dialog, Some(Dialog::LosslessSetup)));
+        assert!(!app.settings.lossless);
+        soloist_ready(&mut app);
+        app.devices.clear();
+        app.apply(Action::ChooseLossless, &ctx);
+        assert!(app.settings.lossless);
+        assert!(app.lossless.pairing.is_some(), "waits for Soloist to join");
+        app.lossless.key = "  typed-key ".into();
+        app.apply(Action::SaveSoloistKey, &ctx);
+        assert!(app.lossless.key.is_empty(), "the field empties once sent");
+        assert!(app.lossless.saving_key);
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn choosing_lossless_again_opens_the_guide_while_soloist_cannot_sign_in() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-signed-out");
+        soloist_ready(&mut app);
+        app.devices.clear();
+        app.settings.lossless = true;
+        assert!(!app.soloist_paired());
+        app.apply(Action::ChooseLossless, &ctx);
+        assert!(
+            matches!(app.dialog, Some(Dialog::LosslessSetup)),
+            "the guide, where the key can be replaced"
+        );
+        assert!(app.lossless.pairing.is_none());
+        app.apply(Action::ChooseLossless, &ctx);
+        assert!(
+            app.lossless.pairing.is_some(),
+            "Start receiver in the guide waits for Spotify pairing"
+        );
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn lossless_waits_for_spotify_pairing_without_sending_the_playback_credential() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-spotify-pairing");
+        soloist_ready(&mut app);
+        app.devices.clear();
+        app.receivers = vec![crate::zeroconf::Receiver {
+            name: "Spotifast Lossless".into(),
+            device_id: Some("soloist".into()),
+            address: std::net::IpAddr::from([127, 0, 0, 1]),
+            port: 4070,
+            path: "/".into(),
+            cast: false,
+        }];
+        app.dialog = Some(Dialog::LosslessSetup);
+        app.apply(Action::ChooseLossless, &ctx);
+        app.follow_lossless(&ctx);
+        assert!(app.lossless.pairing.is_some());
+        assert!(
+            !app.actions
+                .iter()
+                .any(|action| matches!(action, Action::ActivateReceiver(_))),
+            "Soloist must be paired in Spotify, not with librespot's credential"
+        );
+        app.apply(
+            Action::ActivateReceiver(Box::new(app.receivers[0].clone())),
+            &ctx,
+        );
+        assert!(matches!(app.dialog, Some(Dialog::LosslessSetup)));
+        assert!(
+            app.activating_receiver.is_none(),
+            "the picker opens pairing instructions"
+        );
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn soloist_is_ready_only_once_it_joins_the_account() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-joins");
+        soloist_ready(&mut app);
+        let joined = std::mem::take(&mut app.devices);
+        app.settings.lossless = true;
+        app.lossless.supervised = Some(true);
+        let soloist = crate::zeroconf::Receiver {
+            name: "Spotifast Lossless".into(),
+            device_id: Some("soloist".into()),
+            address: std::net::IpAddr::from([127, 0, 0, 1]),
+            port: 4070,
+            path: "/".into(),
+            cast: false,
+        };
+        app.dialog = Some(Dialog::LosslessSetup);
+        app.apply(Action::ChooseLossless, &ctx);
+        app.follow_lossless(&ctx);
+        assert!(app.toasts.is_empty(), "discovery is not pairing");
+        assert!(app.lossless.pairing.is_some());
+        app.devices = joined;
+        app.follow_lossless(&ctx);
+        assert!(app.lossless.pairing.is_none());
+        assert_eq!(
+            app.toasts
+                .iter()
+                .map(|toast| toast.message.as_str())
+                .collect::<Vec<_>>(),
+            ["Spotifast is ready"]
+        );
+
+        // A wait expiring proves neither a bad key nor a completed pairing.
+        app.devices.clear();
+        app.toasts.clear();
+        app.lossless.pairing =
+            Some(Instant::now() - lossless::PAIRING_LIMIT - Duration::from_secs(1));
+        app.follow_lossless(&ctx);
+        assert!(app.lossless.pairing_failed);
+        assert!(app.toasts.is_empty());
+
+        // Pairing in Spotify can finish after the guide's wait expires.
+        soloist_ready(&mut app);
+        app.follow_lossless(&ctx);
+        assert!(!app.lossless.pairing_failed);
+        assert_eq!(app.toasts.len(), 1);
+        app.toasts.clear();
+
+        // Another speaker still says it is ready when it answers.
+        let speaker = crate::zeroconf::Receiver {
+            name: "Kitchen".into(),
+            device_id: Some("kitchen".into()),
+            ..soloist.clone()
+        };
+        app.activating_receiver = None;
+        app.apply(Action::ActivateReceiver(Box::new(speaker.clone())), &ctx);
+        app.handle_backend_events(vec![Event::ReceiverActivated {
+            name: speaker.name.clone(),
+            result: Ok(()),
+        }]);
+        assert_eq!(app.toasts.len(), 1);
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_replaced_soloist_key_starts_the_receiver_again_with_it() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-new-key");
+        soloist_ready(&mut app);
+        app.settings.lossless = true;
+        app.follow_lossless(&ctx);
+        assert_eq!(app.lossless.supervised, Some(true));
+        app.on_soloist_key_saved(Ok(()));
+        app.on_soloist_status(app.lossless.status.clone().unwrap());
+        assert_eq!(
+            app.lossless.supervised, None,
+            "the next frame starts it again although the status reads the same"
+        );
+        app.follow_lossless(&ctx);
+        assert_eq!(app.lossless.supervised, Some(true));
+        app.on_soloist_key_saved(Err("refused".into()));
+        assert_eq!(
+            app.lossless.supervised,
+            Some(true),
+            "a refused key changes nothing"
+        );
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn lossless_moves_music_already_playing_here_to_soloist() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-handoff");
+        app.local_ready = true;
+        app.local_device_id = Some("local".into());
+        app.local = LocalState {
+            connected: true,
+            playback: Playback::Playing,
+            position_ms: 42_000,
+            track: Some(crate::player::LocalTrack {
+                uri: "spotify:track:current".into(),
+                duration_ms: 300_000,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        soloist_ready(&mut app);
+        app.follow_lossless(&ctx);
+        assert!(
+            app.backend.take_transfer_requests().is_empty(),
+            "off: stays"
+        );
+        app.settings.lossless = true;
+        app.follow_lossless(&ctx);
+        assert!(matches!(
+            app.backend.take_transfer_requests().as_slice(),
+            [ApiRequest::Transfer { device_id, play: true }] if device_id == "soloist"
+        ));
+        assert_eq!(app.now_playing().unwrap().position_ms, 42_000);
+        app.follow_lossless(&ctx);
+        assert!(app.backend.take_transfer_requests().is_empty(), "once");
+        app.backend.shutdown();
+    }
+
     fn test_app(name: &str) -> App {
         let root =
             std::env::temp_dir().join(format!("spotifast-{name}-test-{}", std::process::id()));
@@ -24544,6 +24947,7 @@ mod tests {
     #[test]
     fn stale_soloist_events_cannot_undo_optimistic_controls_or_settle_track_intent() {
         let mut app = test_app("soloist-stale-events");
+        app.backend.soloist().assume_device_id("soloist");
         app.local_ready = true;
         app.selected_device = Some("soloist".into());
         let stale = PlaybackState {
@@ -24633,6 +25037,7 @@ mod tests {
     #[test]
     fn stale_soloist_position_cannot_confirm_restarting_the_same_song() {
         let mut app = test_app("soloist-restart-same-song");
+        app.backend.soloist().assume_device_id("soloist");
         app.selected_device = Some("soloist".into());
         let mut state = PlaybackState {
             device: Some(Device {
@@ -24669,6 +25074,7 @@ mod tests {
     #[test]
     fn soloist_feed_populates_idle_local_playback_without_a_web_api_snapshot() {
         let mut app = test_app("soloist-initial-state");
+        app.backend.soloist().assume_device_id("soloist");
         app.local_ready = true;
         assert_eq!(app.target(), Target::Local);
         let state = PlaybackState {

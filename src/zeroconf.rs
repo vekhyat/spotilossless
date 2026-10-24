@@ -452,9 +452,16 @@ pub fn add_user(
         .form(&form)
         .send()
         .context("receiver did not accept the connection")?;
-    let reply: AddUserReply = response
+    let raw: serde_json::Value = response
         .json()
         .context("receiver sent an unreadable reply")?;
+    eprintln!(
+        "[DEBUG-login] status={:?} spotifyError={:?}",
+        raw["status"].as_i64(),
+        raw["spotifyError"].as_i64()
+    );
+    let reply: AddUserReply =
+        serde_json::from_value(raw).context("receiver sent an unreadable reply")?;
     // 101 is this interface's "OK".
     if reply.status == 101 {
         return Ok(());

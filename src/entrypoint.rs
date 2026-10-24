@@ -55,7 +55,8 @@ struct Cli {
     /// `windows-taskbar`, `start-in-tray`, `german`, `lyrics`, `lyrics-fullscreen`, `collection-loading`,
     /// `shuffle-selected`, `shuffle-started`, `undated-mix`, `signed-out`, `connecting`, `library-list`,
     /// `library-list-narrow`, `library-list-wide`, `library-grid`, `library-grid-narrow`,
-    /// or `library-grid-wide`.
+    /// `library-grid-wide`, or on Linux `lossless-guide`, `lossless-connecting`,
+    /// `lossless-on` or `lossless-fallback`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,
@@ -220,7 +221,9 @@ fn run_soloist(command: SoloistCommand) -> i32 {
         std::io::stdin().lock(),
     ) {
         Ok(()) => {
-            println!("Soloist configured. Restart Spotifast, then select it in the device menu.");
+            println!(
+                "Soloist configured. In Spotifast, choose Settings > Playback > Audio quality > Lossless."
+            );
             0
         }
         Err(error) => {

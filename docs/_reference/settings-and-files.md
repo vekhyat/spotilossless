@@ -674,49 +674,84 @@ existing user files are preserved. Selecting Dark or Light is sufficient to stop
 
 ## Linux Soloist receiver (personal fork)
 
-This fork can start Spotify's separately installed Soloist receiver and control
-it through Spotify Connect. Soloist decodes the audio and plays to PipeWire.
-Spotifast does not bundle or download Soloist, fetch lossless streams, or change
-librespot's decoder. Supply your own developer key, current Linux binary and
-already paired data directory. Spotify builds expire after about 90 days.
+This fork can play this computer's music through Soloist, Spotify's own player,
+which streams lossless. Soloist decodes the audio and plays to PipeWire.
+Spotifast does not bundle or mirror Soloist, fetch lossless streams itself, or
+change librespot's decoder. Spotify lists Soloist builds for Linux, macOS and
+Windows; this fork runs it on Linux only.
 
-With Secret Service unlocked, run this in Bash. Shell tracing must be off so
-the key is not printed; `read -s` also keeps it off screen and out of history:
+### Turning it on
 
-```bash
-set +x
-read -rs -p 'Soloist developer key: ' soloist_key; printf '\n'
-printf '%s\n' "$soloist_key" | spotifast soloist setup \
-  --binary "$HOME/.local/share/spotilossless/soloist/8b1ea66c2ee806f21/soloist" \
-  --data-dir "$HOME/.local/share/spotilossless/soloist/session" \
-  --name 'Spotilossless Soloist'
-unset soloist_key
-```
+Open **Settings > Playback > Audio quality** and choose **Lossless**. The first
+time, a guide opens with three steps, each showing what is already done:
 
-Restart Spotifast. While a song plays on this computer, **Play in lossless**
-appears under the artist when a device reports that it can play lossless;
-choose it to move playback there, keeping the song, position and queue. The
-device menu shows **Lossless available** on such a device. Once it plays,
-the player bar and the device menu show the quality the device reports to
-Spotify, **Lossless** or **Lossless 24-bit**, the same report Spotify's own
-apps show. Spotifast reads it from the Connect updates its session receives,
-so it appears after the first change in playback (play, pause, skip or
-volume). If the device can play lossless but reports less, the player bar
+1. **Get Soloist from Spotify.** **Download** fetches Spotify's current archive
+   for this processor from `soloist-builds.spotifycdn.com`, through the proxy
+   set in Settings, and unpacks only the `soloist` binary into
+   `$XDG_STATE_HOME/spotifast/soloist/build-<version>/`. Downloads larger than
+   128 MB are refused. Older builds are removed once the new one answers
+   `soloist --version`.
+2. **Add your Soloist key.** Spotify gives each Premium listener their own key
+   under **Spotify Soloist API Key** at
+   [Spotify for Developers](https://developer.spotify.com/dashboard). Paste it
+   and choose **Save key**. The field is hidden, empties as soon as the key is
+   sent, and the key goes only to Secret Service.
+3. **Connect it to your account.** Choose **Start receiver**, open Spotify's
+   app on the same local network with the account used in Spotifast, and
+   select the receiver name shown in the guide from Spotify's device picker.
+   Spotify signs Soloist in; Spotifast waits for it to join that account.
+   Soloist keeps the session in its data directory for later starts, so this
+   pairing is needed only once. See
+   [Spotify's pairing instructions](https://developer.spotify.com/documentation/soloist/concepts/authentication).
+
+Spotifast's reusable playback credential cannot pair Soloist. A successful
+`addUser` reply does not mean Soloist has signed in, so the guide never sends
+that credential or reports success from that reply. If pairing has not
+finished after 90 seconds, the guide points back to Spotify's device picker
+and asks you to check the account and local network. A wait expiring does not
+prove the Soloist key is wrong. Pairing can still finish after that wait.
+
+Soloist is identified by the UUID it writes to `.device_id` in its data
+directory. A device in the account with the same name is never treated as
+Soloist. While waiting for pairing, this computer's receiver is folded into
+the existing **(this computer)** row, which opens the setup guide.
+
+Choosing **Lossless** again later opens the guide to update or reconnect
+Soloist. Choosing a bitrate turns Lossless off and stops a receiver Spotifast
+started.
+
+### What plays where
+
+While Lossless is on and Soloist has joined the account, this computer is
+Soloist: the device menu shows one **(this computer)** row, songs started here
+play on Soloist, and music already playing on librespot moves there once,
+keeping its song, position and queue. Until Soloist has joined, or whenever it
+stops, music plays on librespot at the chosen bitrate, and the Audio quality
+row says so.
+
+Lossless is a choice, not a promise. Only the quality the playing device
+reports is shown as **Lossless** or **Lossless 24-bit**, in the player bar and
+the device menu. Spotifast reads it from the Connect updates its session
+receives, so it appears after the first change in playback (play, pause, skip
+or volume). If the device can play lossless but reports less, the player bar
 says **Lossless is off for this device**: set the device's streaming quality
-to Lossless once in Spotify's app, which remembers it. Spotify offers no
-supported way for another app to change that setting. Use a unique device
-name. Playback controls use the
-existing Spotify Connect connection and account requirements. Soloist commands,
-transfers, queue additions and shuffle-play use the session's Connect route,
-even when Spotify does not flag the receiver as restricted. The default exact
-name **Spotilossless Soloist** is recognised without `soloist.json`; a configured
-name takes its place after setup. No playback transfer happens automatically.
+to Lossless once in Spotify's phone app, which remembers it. Spotify offers no
+supported way for another app to change that setting. Soloist's sound does not
+pass through Spotifast's equalizer.
 
 A transfer uses Spotify's native Connect handoff rather than starting a new
 track list. The current context, queue and position stay visible while it
 settles, and the receiver is told to keep the chosen playing or paused state.
 This relies on the source device publishing a valid Connect context and queue;
 Spotifast cannot recover context pages that librespot has already lost.
+
+### Build expiry
+
+Spotify stops each build 90 days after its build date (exit code 10).
+Spotifast reads the date from `soloist --version`. From 14 days before, it
+shows a notice once per run, and the guide offers **Update**. If a build has
+already stopped, the supervisor reports it and music plays on librespot until
+the update.
 
 While Soloist is active, its local WebSocket events update the song, position,
 play/pause, volume, shuffle and repeat immediately, even during a Web API rate
@@ -730,27 +765,50 @@ it can observe an already running receiver in
 `$XDG_DATA_HOME/spotilossless/soloist/session` (normally
 `~/.local/share/spotilossless/soloist/session`). It verifies the PID, executable,
 data directory and loopback WebSocket address before starting the trace. The
-receiver's reported name identifies it even when it differs from the default,
-but its device ID must also match exactly one device in the signed-in playback
-session's Connect cluster. Observation needs no Soloist API key, never launches
-the receiver itself, and never stops an externally owned receiver.
+receiver is identified by the Connect id in its data directory's `.device_id`,
+never by its name, and that id must be in the signed-in playback session's
+Connect cluster. Commands go over Connect, the trace replaces Web API polls,
+and the visualisers capture its output only for that id. Observation needs no
+Soloist API key, never launches the receiver itself, and never stops an
+externally owned receiver.
+
+### Files, keys and the command line
 
 `soloist.json` in Spotifast's config directory stores only `binary`, `data_dir`
-and `device_name`. Older files without `device_name` use **Spotilossless
-Soloist**. Writes replace the file atomically. The API key is stored under
-`rocks.spotifast.Spotifast`, entry `soloist-api-key`, in Secret Service. It is
-independent of Spotify sign-out and is never saved in JSON or logged. Soloist
-requires the key in its process arguments, so local process inspection can
-still expose it while it runs.
+and `device_name`. The guide names the receiver after this computer, for
+example **Spotifast Lossless**, and keeps an existing data directory, including
+one paired before the guide existed at
+`$XDG_DATA_HOME/spotilossless/soloist/session`. Older files without
+`device_name` use **Spotilossless Soloist**. Writes replace the file
+atomically. The API key is stored under `rocks.spotifast.Spotifast`, entry
+`soloist-api-key`, in Secret Service. It is independent of Spotify sign-out
+and is never saved in JSON or logged. Soloist requires the key in its process
+arguments, so local process inspection can still expose it while it runs.
+
+Scripts can still configure the same files without the guide. With Secret
+Service unlocked, run this in Bash; `read -s` keeps the key off screen and out
+of history:
+
+```bash
+set +x
+read -rs -p 'Soloist developer key: ' soloist_key; printf '\n'
+printf '%s\n' "$soloist_key" | spotifast soloist setup \
+  --binary /path/to/soloist \
+  --data-dir "$HOME/.local/share/spotilossless/soloist/session" \
+  --name 'Spotilossless Soloist'
+unset soloist_key
+```
+
+Then choose **Lossless** in Settings.
 
 Spotifast reuses a matching live receiver for that data directory and leaves
 it running on quit. A receiver started by Spotifast stops when Spotifast quits.
-Unexpected exits retry with increasing delays up to 60 seconds; replace an
-expired binary and rerun setup if its path changed. Locked or missing keys
-show an error: unlock Secret Service, rerun setup, and restart Spotifast.
-Demo mode never starts Soloist. Remove `soloist.json` while Spotifast is closed
-to disable supervision; remove the separate Secret Service entry with your
-keyring manager if you also want to forget the key. Pairing and Soloist's own
+Unexpected exits retry with increasing delays up to 60 seconds; an expired
+build needs **Update** in the guide. Locked or missing keys show an error:
+unlock Secret Service, then choose **Lossless** again. Demo mode never starts
+Soloist. Choose a bitrate to stop supervision; remove `soloist.json` while
+Spotifast is closed to forget the setup, and remove the separate Secret
+Service entry with your keyring manager if you also want to forget the key. Pairing and Soloist's own
 cache remain in the supplied data directory.
 
 Soloist audio bypasses Spotifast's librespot equalizer. The app follows its

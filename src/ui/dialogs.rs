@@ -198,6 +198,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         }
                     });
                 }
+                #[cfg(target_os = "linux")]
+                Dialog::LosslessSetup => lossless_setup(app, ui),
                 Dialog::PremiumNeeded => {
                     theme::text(
                         ui,
@@ -230,6 +232,245 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if response.should_close() {
         app.actions.push(Action::CloseDialog);
     }
+}
+
+/// Three steps, each showing what is already done: Spotify's download, the
+/// listener's own key, then signing Soloist in with this account.
+#[cfg(target_os = "linux")]
+fn lossless_setup(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let locale = app.locale;
+    theme::text(
+        ui,
+        gettext(locale, "Play lossless"),
+        theme::bold(20.0),
+        palette.text,
+    );
+    ui.add_space(8.0);
+    // Taller than a small window: the steps scroll and Done stays in reach.
+    let room = ui.ctx().content_rect().height() - 190.0;
+    crate::autoscroll::show(
+        ui,
+        egui::ScrollArea::vertical()
+            .max_height(room.max(160.0))
+            .auto_shrink([false, true]),
+        egui::Vec2b::new(false, true),
+        |ui| lossless_steps(app, ui),
+    );
+    ui.add_space(16.0);
+    buttons(ui, |ui| {
+        if theme::pill_button(ui, &palette, &gettext(locale, "Done"), false).clicked() {
+            app.actions.push(Action::CloseDialog);
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn lossless_steps(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let locale = app.locale;
+    let paragraph = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(text)
+                    .font(theme::regular(13.5))
+                    .color(color),
+            )
+            .wrap(),
+        );
+    };
+    let heading = |ui: &mut egui::Ui, text: &str| {
+        ui.add_space(14.0);
+        theme::text(ui, text, theme::semibold(15.0), palette.text);
+        ui.add_space(4.0);
+    };
+    let status = app.lossless.status.clone().unwrap_or_default();
+    let checking = app.lossless.status.is_none();
+
+    paragraph(
+        ui,
+        &gettext(
+            locale,
+            "Spotify plays lossless through Soloist, its own player. On Linux, Spotifast runs it in the background, and this computer stays one device.",
+        ),
+        palette.secondary,
+    );
+
+    heading(ui, &gettext(locale, "1. Get Soloist from Spotify"));
+    if let Some(build) = &status.build {
+        // Translators: {version} is a version number such as 1.3.10.
+        let installed =
+            gettext(locale, "Installed, version {version}").replace("{version}", &build.version);
+        paragraph(ui, &installed, palette.accent);
+        if let Some(days) = app.soloist_expiring() {
+            paragraph(
+                ui,
+                &crate::app::lossless::expiry_message(locale, days),
+                palette.warning,
+            );
+        }
+    } else {
+        paragraph(
+            ui,
+            &gettext(
+                locale,
+                "Downloads Spotify's current build for this computer.",
+            ),
+            palette.secondary,
+        );
+    }
+    if status.build.is_none() || app.soloist_expiring().is_some() {
+        ui.add_space(6.0);
+        let label = if app.lossless.installing {
+            gettext(locale, "Downloading…")
+        } else if status.build.is_some() {
+            gettext(locale, "Update")
+        } else {
+            gettext(locale, "Download")
+        };
+        ui.add_enabled_ui(!app.lossless.installing && !checking, |ui| {
+            if theme::pill_button(ui, &palette, &label, true).clicked() {
+                app.actions.push(Action::InstallSoloist);
+            }
+        });
+    }
+    if let Some(error) = &app.lossless.install_error {
+        paragraph(ui, error, palette.danger);
+    }
+
+    heading(ui, &gettext(locale, "2. Add your Soloist key"));
+    paragraph(
+        ui,
+        &gettext(
+            locale,
+            "Spotify gives each Premium listener their own key. Sign in, open Spotify Soloist API Key, and copy it here. It stays in your keyring.",
+        ),
+        palette.secondary,
+    );
+    ui.add_space(6.0);
+    if theme::pill_button(
+        ui,
+        &palette,
+        &gettext(locale, "Open Spotify for Developers"),
+        false,
+    )
+    .clicked()
+    {
+        app.actions
+            .push(Action::OpenUrl(crate::soloist::KEY_PAGE.to_owned()));
+    }
+    ui.add_space(6.0);
+    let hint = if status.key_saved {
+        gettext(locale, "Saved. Paste a new key to replace it.")
+    } else {
+        gettext(locale, "Paste your key")
+    };
+    let field = Frame::new()
+        .fill(palette.surface)
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            super::widgets::text_edit(
+                ui,
+                locale,
+                egui::TextEdit::singleline(&mut app.lossless.key)
+                    .id(egui::Id::new("soloist-key"))
+                    .password(true)
+                    .hint_text(egui::RichText::new(hint.as_ref()).color(palette.dim))
+                    .font(theme::regular(14.0))
+                    .frame(egui::Frame::NONE)
+                    .desired_width(f32::INFINITY),
+            )
+        })
+        .inner;
+    let submitted = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+    ui.add_space(6.0);
+    let save = if app.lossless.saving_key {
+        gettext(locale, "Saving…")
+    } else {
+        gettext(locale, "Save key")
+    };
+    ui.add_enabled_ui(
+        !app.lossless.saving_key && !app.lossless.key.trim().is_empty(),
+        |ui| {
+            if theme::pill_button(ui, &palette, &save, !status.key_saved).clicked() || submitted {
+                app.actions.push(Action::SaveSoloistKey);
+            }
+        },
+    );
+    if let Some(error) = &app.lossless.key_error {
+        paragraph(ui, error, palette.danger);
+    }
+
+    heading(ui, &gettext(locale, "3. Connect it to your account"));
+    let paired = app.soloist_paired();
+    let (line, color) = if paired && app.settings.lossless {
+        (
+            gettext(
+                locale,
+                "Connected. Music on this computer plays through Soloist. The player bar shows the quality Spotify reports.",
+            ),
+            palette.accent,
+        )
+    } else if app.lossless.pairing.is_some() {
+        (
+            gettext(locale, "Waiting for Spotify to pair this receiver…"),
+            palette.secondary,
+        )
+    } else if app.lossless.pairing_failed {
+        (
+            gettext(
+                locale,
+                "Pairing hasn't finished. Check that Spotify uses the same account and local network, select the receiver in Spotify's device picker, then press Check again.",
+            ),
+            palette.danger,
+        )
+    } else {
+        (
+            gettext(
+                locale,
+                "Start the receiver, then pair it once in Spotify's app. It remembers your account for later starts.",
+            ),
+            palette.secondary,
+        )
+    };
+    paragraph(ui, &line, color);
+    if !(paired && app.settings.lossless) {
+        let receiver_name = status
+            .config
+            .as_ref()
+            .map(|config| config.device_name.clone())
+            .unwrap_or_else(|| crate::soloist::device_name_for(&app.settings.device_name));
+        paragraph(
+            ui,
+            &gettext(
+                locale,
+                "In Spotify's app, use the same account and local network as Spotifast. Open the device picker and select {name}.",
+            ).replace("{name}", &receiver_name),
+            palette.secondary,
+        );
+        ui.add_space(6.0);
+        let label = if app.lossless.pairing_failed {
+            gettext(locale, "Check again")
+        } else {
+            gettext(locale, "Start receiver")
+        };
+        ui.add_enabled_ui(status.ready() && app.lossless.pairing.is_none(), |ui| {
+            if theme::pill_button(ui, &palette, &label, true).clicked() {
+                app.actions.push(Action::ChooseLossless);
+            }
+        });
+    }
+
+    ui.add_space(14.0);
+    paragraph(
+        ui,
+        &gettext(
+            locale,
+            "Soloist's sound skips Spotifast's equalizer. If Spotify reports less than lossless, set this device's audio quality to Lossless once in Spotify's phone app.",
+        ),
+        palette.dim,
+    );
 }
 
 // Keep button rows content-sized when the shared modal area last held a taller dialog.

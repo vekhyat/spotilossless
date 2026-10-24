@@ -671,7 +671,22 @@ pub fn autostart() -> fastframe_autostart::Autostart {
     fastframe_autostart::Autostart::new("spotifast", "Spotifast")
 }
 
+/// A Soloist key on its way to Secret Service. No `Debug`, so it can never
+/// reach a log line through a command.
+#[cfg(target_os = "linux")]
+pub struct SoloistKey(pub String);
+
 pub enum Command {
+    /// Reads what the Lossless setup guide shows.
+    #[cfg(target_os = "linux")]
+    SoloistStatus,
+    /// Downloads Spotify's current Soloist build and points the setup at it.
+    #[cfg(target_os = "linux")]
+    SoloistInstall {
+        device_name: String,
+    },
+    #[cfg(target_os = "linux")]
+    SoloistSaveKey(SoloistKey),
     #[cfg(target_os = "linux")]
     SoloistFeed {
         state: Option<Box<PlaybackState>>,
@@ -940,6 +955,12 @@ pub struct LyricsRequest {
 
 pub enum Event {
     #[cfg(target_os = "linux")]
+    SoloistStatus(Box<crate::soloist::Status>),
+    #[cfg(target_os = "linux")]
+    SoloistInstalled(Result<crate::soloist::Build, String>),
+    #[cfg(target_os = "linux")]
+    SoloistKeySaved(Result<(), String>),
+    #[cfg(target_os = "linux")]
     SoloistPlayback {
         state: Box<PlaybackState>,
         received_at: Instant,
@@ -1133,9 +1154,61 @@ pub enum LocalPlayback {
 pub use fastframe_shell::Waker;
 
 /// The interface's handle to the runtime.
+/// Starts and stops Soloist's supervisor when Lossless is chosen or set up.
+/// The handle outlives each supervisor, so the app and the tap keep one view.
+#[cfg(target_os = "linux")]
+struct SoloistControl {
+    dirs: AppDirs,
+    handle: crate::soloist::Handle,
+    /// False in tests and before a restored sign-in: nothing is launched.
+    allowed: bool,
+    current: Arc<std::sync::Mutex<Option<crate::soloist::Supervisor>>>,
+    report: Arc<dyn Fn(String) + Send + Sync>,
+    changed: Arc<dyn Fn() + Send + Sync>,
+}
+
+#[cfg(target_os = "linux")]
+impl SoloistControl {
+    /// Replaces the running supervisor on its own thread: stopping one waits
+    /// for its receiver to exit, which must not hold up a frame.
+    fn restart(&self, enabled: bool) {
+        let enabled = enabled && self.allowed;
+        let (dirs, handle, current) = (
+            self.dirs.clone(),
+            self.handle.clone(),
+            Arc::clone(&self.current),
+        );
+        let (report, changed) = (Arc::clone(&self.report), Arc::clone(&self.changed));
+        let _ = std::thread::Builder::new()
+            .name("soloist-restart".into())
+            .spawn(move || {
+                let mut current = current.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some(mut old) = current.take() {
+                    old.shutdown();
+                }
+                if enabled {
+                    *current = Some(crate::soloist::Supervisor::start(
+                        dirs,
+                        handle,
+                        true,
+                        move |message| report(message),
+                        move || changed(),
+                    ));
+                }
+            });
+    }
+
+    fn shutdown(&self) {
+        let mut current = self.current.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(mut old) = current.take() {
+            old.shutdown();
+        }
+    }
+}
+
 pub struct Backend {
     #[cfg(target_os = "linux")]
-    soloist: crate::soloist::Supervisor,
+    soloist: SoloistControl,
     commands: mpsc::UnboundedSender<Command>,
     events: std::sync::mpsc::Receiver<Event>,
     art: ArtLoader,
@@ -1212,15 +1285,17 @@ impl Backend {
             let events = event_tx.clone();
             let error_waker = waker.clone();
             let change_waker = waker.clone();
-            crate::soloist::Supervisor::start(
-                dirs.clone(),
-                restore_sign_in && !cfg!(test),
-                move |message| {
+            SoloistControl {
+                dirs: dirs.clone(),
+                handle: crate::soloist::Handle::default(),
+                allowed: restore_sign_in && !cfg!(test),
+                current: Arc::new(std::sync::Mutex::new(None)),
+                report: Arc::new(move |message| {
                     let _ = events.send(Event::Error(message));
                     error_waker.wake();
-                },
-                move || change_waker.wake(),
-            )
+                }),
+                changed: Arc::new(move || change_waker.wake()),
+            }
         };
         #[cfg(target_os = "linux")]
         let soloist_handle = soloist.handle.clone();
@@ -1638,6 +1713,13 @@ impl Backend {
     #[cfg(target_os = "linux")]
     pub fn soloist(&self) -> &crate::soloist::Handle {
         &self.soloist.handle
+    }
+
+    /// Supervises Soloist while Lossless is chosen and stops it otherwise.
+    /// Call again after setup changes `soloist.json` or the key.
+    #[cfg(target_os = "linux")]
+    pub fn supervise_soloist(&self, enabled: bool) {
+        self.soloist.restart(enabled);
     }
 
     pub fn shutdown(&mut self) {
@@ -2206,6 +2288,40 @@ impl Worker {
                             }
                         };
                         let _ = events.send(Event::Autostart { request, result });
+                        waker.wake();
+                    });
+                }
+                #[cfg(target_os = "linux")]
+                Command::SoloistStatus => {
+                    let (dirs, events, waker) =
+                        (self.dirs.clone(), self.events.clone(), self.waker.clone());
+                    tokio::task::spawn_blocking(move || {
+                        let status = crate::soloist::status(&dirs);
+                        let _ = events.send(Event::SoloistStatus(Box::new(status)));
+                        waker.wake();
+                    });
+                }
+                #[cfg(target_os = "linux")]
+                Command::SoloistInstall { device_name } => {
+                    let (dirs, events, waker) =
+                        (self.dirs.clone(), self.events.clone(), self.waker.clone());
+                    let client = self.http.client();
+                    tokio::spawn(async move {
+                        let result = match client {
+                            Ok(client) => install_soloist(&client, dirs, device_name).await,
+                            Err(error) => Err(error),
+                        };
+                        let _ = events.send(Event::SoloistInstalled(result));
+                        waker.wake();
+                    });
+                }
+                #[cfg(target_os = "linux")]
+                Command::SoloistSaveKey(key) => {
+                    let (events, waker) = (self.events.clone(), self.waker.clone());
+                    tokio::task::spawn_blocking(move || {
+                        let result = crate::soloist::save_key(&key.0);
+                        drop(key);
+                        let _ = events.send(Event::SoloistKeySaved(result));
                         waker.wake();
                     });
                 }
@@ -4715,13 +4831,18 @@ impl Worker {
             same_account(&engine.session().username(), self.api.account().as_ref())
         })?;
         let (state, received_at) = self.soloist_state.as_ref()?;
-        soloist_playback(state, *received_at, &engine.connect_devices())
+        soloist_playback(
+            state,
+            *received_at,
+            &engine.connect_devices(),
+            self.soloist.device_id().as_deref(),
+        )
     }
 
     fn observe_connect_response(&self, response: &mut ApiResponse) {
         let classify = |device: &mut Device| {
             #[cfg(target_os = "linux")]
-            if self.soloist.matches_device(&device.name) {
+            if self.soloist.is_device(device.id.as_deref()) {
                 device.is_restricted = true;
             }
             let _ = device;
@@ -4759,7 +4880,7 @@ impl Worker {
         }) {
             let mut devices = engine.connect_devices();
             for device in &mut devices {
-                device.is_restricted |= self.soloist.matches_device(&device.name);
+                device.is_restricted |= self.soloist.is_device(device.id.as_deref());
             }
             self.connect.observe_connect_devices(&devices);
         }
@@ -4826,22 +4947,82 @@ impl Worker {
     }
 }
 
+/// Fetches Spotify's archive for this computer, bounded in size, then
+/// unpacks it off the runtime. The partial file never outlives the attempt.
+#[cfg(target_os = "linux")]
+async fn install_soloist(
+    client: &reqwest::Client,
+    dirs: AppDirs,
+    device_name: String,
+) -> Result<crate::soloist::Build, String> {
+    use tokio::io::AsyncWriteExt;
+    const FAILED: &str =
+        "Couldn't download Soloist from Spotify. Check your connection and try again.";
+    let url = crate::soloist::download_url()
+        .ok_or_else(|| "Spotify does not offer Soloist for this processor.".to_string())?;
+    let folder = dirs.state.join("soloist");
+    tokio::fs::create_dir_all(&folder)
+        .await
+        .map_err(|_| "Couldn't create Soloist's folder. Check its permissions.".to_string())?;
+    let archive = folder.join("download.part");
+    let downloaded = async {
+        let mut response = client
+            .get(url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|_| FAILED.to_string())?;
+        let mut file = tokio::fs::File::create(&archive)
+            .await
+            .map_err(|_| FAILED.to_string())?;
+        let mut written = 0u64;
+        while let Some(chunk) = response.chunk().await.map_err(|_| FAILED.to_string())? {
+            written += chunk.len() as u64;
+            if written > crate::soloist::DOWNLOAD_LIMIT {
+                return Err(FAILED.to_string());
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|_| FAILED.to_string())?;
+        }
+        file.flush().await.map_err(|_| FAILED.to_string())
+    }
+    .await;
+    let result = match downloaded {
+        Ok(()) => {
+            let unpack = archive.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::soloist::install(
+                    &dirs,
+                    &unpack,
+                    &crate::soloist::device_name_for(&device_name),
+                )
+            })
+            .await
+            .unwrap_or_else(|_| Err(FAILED.to_string()))
+        }
+        Err(error) => Err(error),
+    };
+    let _ = tokio::fs::remove_file(&archive).await;
+    result
+}
+
 #[cfg(target_os = "linux")]
 fn soloist_playback(
     state: &PlaybackState,
     received_at: Instant,
     devices: &[Device],
+    soloist_id: Option<&str>,
 ) -> Option<PlaybackState> {
-    let device = state.device.as_ref()?;
-    let mut matching = devices
+    // The trace names the receiver but carries no id. Its id, read from its
+    // data directory, must be in this account's Connect cluster.
+    let id = soloist_id?;
+    state.device.as_ref()?;
+    devices
         .iter()
-        .filter(|known| known.name == device.name && known.id.is_some());
-    let known = matching.next()?;
-    if matching.next().is_some() {
-        return None;
-    }
+        .find(|known| known.id.as_deref() == Some(id))?;
     let mut state = state.clone();
-    state.device.as_mut()?.id = known.id.clone();
+    state.device.as_mut()?.id = Some(id.to_owned());
     if state.is_playing {
         let position = u64::from(state.progress_ms.unwrap_or(0))
             .saturating_add(received_at.elapsed().as_millis().min(u64::MAX.into()) as u64);
@@ -7785,6 +7966,18 @@ mod authorization_tests {
     #[test]
     fn soloist_without_configuration_or_restricted_flag_uses_connect() {
         let (_runtime, worker, _) = worker("soloist-connect");
+        worker.soloist.assume_device_id("soloist");
+        let namesake = Device {
+            id: Some("phone".into()),
+            name: "Spotilossless Soloist".into(),
+            ..Default::default()
+        };
+        worker.observe_connect_response(&mut ApiResponse::Devices(Ok(vec![namesake])));
+        assert_eq!(
+            worker.connect.restricted_target(Some("phone")),
+            None,
+            "a namesake stays an ordinary Web API device"
+        );
         let device = Device {
             id: Some("soloist".into()),
             name: "Spotilossless Soloist".into(),
@@ -7812,7 +8005,7 @@ mod authorization_tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn soloist_feed_uses_only_an_unambiguous_device_from_the_accounts_connect_cluster() {
+    fn soloist_feed_uses_only_soloists_own_id_from_the_accounts_connect_cluster() {
         let state = PlaybackState {
             device: Some(Device {
                 name: "Custom Soloist".into(),
@@ -7833,10 +8026,22 @@ mod authorization_tests {
             name: "Custom Soloist".into(),
             ..Default::default()
         };
+        let namesake = Device {
+            id: Some("phone-id".into()),
+            ..device.clone()
+        };
         let at = Instant::now() - Duration::from_secs(1);
-        assert!(soloist_playback(&state, at, &[]).is_none());
-        assert!(soloist_playback(&state, at, &[device.clone(), device.clone()]).is_none());
-        let current = soloist_playback(&state, at, std::slice::from_ref(&device)).unwrap();
+        let id = Some("soloist-id");
+        assert!(soloist_playback(&state, at, &[], id).is_none());
+        assert!(
+            soloist_playback(&state, at, std::slice::from_ref(&device), None).is_none(),
+            "no id read yet: a name proves nothing"
+        );
+        assert!(
+            soloist_playback(&state, at, std::slice::from_ref(&namesake), id).is_none(),
+            "a namesake in the account is not Soloist"
+        );
+        let current = soloist_playback(&state, at, &[namesake, device.clone()], id).unwrap();
         assert_eq!(current.device.unwrap().id.as_deref(), Some("soloist-id"));
         assert!((200_000..201_000).contains(&current.progress_ms.unwrap()));
         let paused = PlaybackState {
@@ -7844,7 +8049,7 @@ mod authorization_tests {
             ..state
         };
         assert_eq!(
-            soloist_playback(&paused, at, &[device])
+            soloist_playback(&paused, at, &[device], id)
                 .unwrap()
                 .progress_ms,
             Some(199_000)
@@ -7882,6 +8087,7 @@ mod authorization_tests {
     #[test]
     fn every_soloist_mutation_stays_off_the_web_api_even_without_a_session() {
         let (runtime, worker, _) = worker("soloist-command-routes");
+        worker.soloist.assume_device_id("soloist");
         worker.observe_connect_response(&mut ApiResponse::PlaybackState {
             seq: 1,
             result: Ok(Some(PlaybackState {

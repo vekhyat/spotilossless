@@ -8,6 +8,7 @@ src/ui/widgets.rs
 src/app.rs
 src/ui/settings.rs
 src/api/models.rs
+src/app/lossless.rs
 src/app/radio.rs
 src/milkdrop.rs
 src/model.rs

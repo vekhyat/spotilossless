@@ -218,6 +218,12 @@ windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globali
 [target.'cfg(target_os = "linux")'.dependencies]
 # Reads Soloist's local WebSocket trace through its installed CLI, without a new WebSocket stack.
 tokio = { version = "1", features = ["process"] }
+# PR_SET_PDEATHSIG, so a Soloist Spotifast starts ends with it however it
+# ends. Already compiled by the standard library's dependents.
+libc = "0.2"
+# This computer's addresses, so Lossless setup recognises only a Soloist
+# answering from this machine. mdns-sd already compiles this version.
+if-addrs = "0.15"
 # Reuses the zbus/Tokio stack already used for desktop integration.
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 # The session bus, for the desktop's light or dark preference

@@ -205,15 +205,17 @@ The Web API and librespot do not provide these features:
   will reconsider this if librespot gains lawful support, but it will not
   bypass Spotify's DRM.
 - **Soloist as the player.** Spotify's Soloist plays lossless and works with
-  Spotify Connect, but Spotify ships it only for Linux and does not allow apps
-  to bundle it. Each listener would need their own developer key and pairing,
+  Spotify Connect. Spotify's download page now lists Linux, macOS and Windows
+  builds, but Spotify does not allow apps to bundle it. Each listener would need their own developer key and pairing,
   builds stop working after 90 days, and it has no API for the library,
   playlists or search. The personal fork can
   [capture its PipeWire output for visualisers](/soloist-tap/), with volume
   limitations, but the output still bypasses Spotifast's equalizer.
   Spotifast will reconsider it if Spotify offers a supported desktop path.
-  This personal fork has an opt-in Linux supervisor for a separately installed,
-  already paired receiver with the listener's own key. It controls Soloist as
+  This personal fork has an opt-in Linux **Lossless** choice whose guide
+  downloads Soloist from Spotify on request and stores the listener's own key.
+  The listener pairs it once in Spotify's app on the same local network;
+  Spotifast's playback credential cannot do that pairing. It controls Soloist as
   a Connect device and does not change librespot's playback capabilities. See
   [Linux Soloist setup](/settings-and-files/#linux-soloist-receiver-personal-fork)
   and [issue #965](https://github.com/crmne/spotifast/issues/965).

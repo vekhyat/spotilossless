@@ -22,6 +22,8 @@ pub(crate) enum Update {
 #[derive(Default)]
 struct Parser {
     name: Option<String>,
+    /// Set by the first `auth_state` event; before it, `logged_in` means nothing.
+    auth_seen: bool,
     logged_in: bool,
     timestamp: u64,
 }
@@ -34,6 +36,7 @@ impl Parser {
         let event: Value = serde_json::from_str(line.get(line.find('{')?..)?).ok()?;
         match event["type"].as_str()? {
             "auth_state" => {
+                self.auth_seen = true;
                 self.logged_in = event["logged_in"].as_bool() == Some(true);
                 if let Some(name) = event["device_name"]
                     .as_str()
@@ -189,7 +192,7 @@ fn parse_item(entity: &Value) -> Option<PlayableItem> {
     }
 }
 
-fn source(dirs: &AppDirs) -> Option<(Config, u32)> {
+fn source(dirs: &AppDirs) -> Option<(Config, u32, Option<String>)> {
     let config = match Config::load(&dirs.soloist_file()).ok()? {
         Some(config) => config,
         None => {
@@ -224,7 +227,8 @@ fn source(dirs: &AppDirs) -> Option<(Config, u32)> {
         return None;
     }
     let pid = existing(&config)?.pid;
-    Some((config, pid))
+    let device_id = super::read_device_id(&config.data_dir);
+    Some((config, pid, device_id))
 }
 
 async fn trace(
@@ -262,14 +266,22 @@ async fn trace(
         if let Some(update) = parser.read(&line, now_ms) {
             notify(Some(update), received_at);
         }
+        let mut snapshot = handle
+            .0
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(name) = &parser.name {
-            handle
-                .0
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .device_name = Some(name.clone());
+            snapshot.device_name = Some(name.clone());
+        }
+        if parser.auth_seen {
+            snapshot.signed_in = Some(parser.logged_in);
         }
     }
+    handle
+        .0
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .signed_in = None;
     child.kill().await.ok();
     child.wait().await.ok();
     Ok(())
@@ -282,9 +294,10 @@ pub(crate) async fn run(
 ) {
     loop {
         let lookup = dirs.clone();
-        if let Ok(Some((config, pid))) = tokio::task::spawn_blocking(move || source(&lookup)).await
+        if let Ok(Some((config, pid, device_id))) =
+            tokio::task::spawn_blocking(move || source(&lookup)).await
         {
-            handle.publish(&config, Some(pid));
+            handle.publish(&config, Some(pid), device_id);
             let _ = trace(&config, &handle, &notify).await;
             notify(None, Instant::now());
         }
@@ -367,7 +380,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires the already running local Soloist; pauses it and reads its WebSocket trace"]
     async fn live_receiver_reports_paused_state_over_local_trace() {
-        let (config, pid) = source(&AppDirs::installed()).expect("running local Soloist");
+        let (config, pid, device_id) =
+            source(&AppDirs::installed()).expect("running local Soloist");
         let status = tokio::process::Command::new(&config.binary)
             .args(["ctl", "pause", "-D"])
             .arg(&config.data_dir)
@@ -384,7 +398,7 @@ mod tests {
                 .success()
         );
         let handle = Handle::default();
-        handle.publish(&config, Some(pid));
+        handle.publish(&config, Some(pid), device_id);
         let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
         let monitor = tokio::spawn(async move {
             trace(&config, &handle, &|update, _| {

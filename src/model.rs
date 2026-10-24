@@ -1006,6 +1006,9 @@ pub enum Dialog {
     PremiumNeeded,
     /// Introduce personal Spotify apps to eligible listeners once.
     PersonalAppIntro,
+    /// The steps to play lossless through Spotify's Soloist receiver.
+    #[cfg(target_os = "linux")]
+    LosslessSetup,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1241,6 +1244,14 @@ pub enum Action {
     /// Add, replace, or remove the optional personal Web API app.
     ConfigurePersonalWebApp,
     OpenPersonalAppSetup,
+    /// Lossless in Settings: turn it on, or show its setup guide first.
+    #[cfg(target_os = "linux")]
+    ChooseLossless,
+    #[cfg(target_os = "linux")]
+    InstallSoloist,
+    /// Saves the key typed into the setup guide; the action never holds it.
+    #[cfg(target_os = "linux")]
+    SaveSoloistKey,
     /// The listener closed the "Spotify is being slow" banner.
     CloseSlowBanner,
     /// The listener closed the banner saying Spotify refused a song's

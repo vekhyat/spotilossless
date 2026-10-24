@@ -1217,6 +1217,24 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 }
             }
             "devices" => app.show_devices = true,
+            // The Lossless guide at its steps, and Soloist as this computer.
+            #[cfg(target_os = "linux")]
+            "lossless-guide" => {
+                app.demo_lossless(crate::app::lossless::DemoStage::Started);
+                app.dialog = Some(crate::model::Dialog::LosslessSetup);
+            }
+            #[cfg(target_os = "linux")]
+            "lossless-connecting" => {
+                app.demo_lossless(crate::app::lossless::DemoStage::Connecting);
+                app.dialog = Some(crate::model::Dialog::LosslessSetup);
+            }
+            #[cfg(target_os = "linux")]
+            "lossless-on" => app.demo_lossless(crate::app::lossless::DemoStage::On),
+            #[cfg(target_os = "linux")]
+            "lossless-fallback" => {
+                app.demo_lossless(crate::app::lossless::DemoStage::Connecting);
+                app.lossless.pairing = None;
+            }
             // Home while Spotify has yet to answer for its shelves.
             "home-loading" => {
                 app.home.recently_played = Loadable::Loading;

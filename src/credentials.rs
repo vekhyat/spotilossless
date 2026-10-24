@@ -332,17 +332,29 @@ impl ProtectedStore for NativeStore {
 /// fallback. Call these only from the setup command or a background thread.
 #[cfg(target_os = "linux")]
 pub(crate) fn soloist_key() -> Result<Option<Vec<u8>>, Error> {
-    NativeStore::default().read("soloist-api-key")
+    soloist_store().read("soloist-api-key")
 }
 
 #[cfg(target_os = "linux")]
 pub(crate) fn store_soloist_key(secret: &[u8]) -> Result<(), Error> {
-    let mut store = NativeStore::default();
+    let mut store = soloist_store();
     store.write("soloist-api-key", secret)?;
     if store.read("soloist-api-key")?.as_deref() != Some(secret) {
         return Err(Error::Verification);
     }
     Ok(())
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn soloist_store() -> NativeStore {
+    NativeStore::default()
+}
+
+/// Tests save Soloist keys too. Secret Service would keep them in place of
+/// the listener's own, and Soloist would then fail to sign in.
+#[cfg(all(target_os = "linux", test))]
+fn soloist_store() -> tests::SoloistKeyring {
+    tests::SoloistKeyring
 }
 
 /// Credential Manager first, and a copy sealed for this Windows user in the
@@ -1157,6 +1169,41 @@ mod tests {
                 || Err(platform("Windows error code 1312"))
             ),
             Ok(())
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    static SOLOIST_KEY: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+
+    #[cfg(target_os = "linux")]
+    pub(super) struct SoloistKeyring;
+
+    #[cfg(target_os = "linux")]
+    impl ProtectedStore for SoloistKeyring {
+        fn read(&mut self, _: &str) -> Result<Option<Vec<u8>>, Error> {
+            Ok(SOLOIST_KEY.lock().unwrap().clone())
+        }
+        fn write(&mut self, _: &str, secret: &[u8]) -> Result<(), Error> {
+            *SOLOIST_KEY.lock().unwrap() = Some(secret.to_vec());
+            Ok(())
+        }
+        fn delete(&mut self, _: &str) -> Result<(), Error> {
+            *SOLOIST_KEY.lock().unwrap() = None;
+            Ok(())
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tests_keep_soloist_keys_out_of_the_listeners_keyring() {
+        store_soloist_key(b"test-soloist-key").unwrap();
+        assert_eq!(
+            soloist_key().unwrap().as_deref(),
+            Some(&b"test-soloist-key"[..])
+        );
+        assert_eq!(
+            SOLOIST_KEY.lock().unwrap().as_deref(),
+            Some(&b"test-soloist-key"[..])
         );
     }
 

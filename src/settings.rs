@@ -265,6 +265,10 @@ pub struct Settings {
     pub device_name: String,
     /// 96, 160, or 320 kbps.
     pub bitrate: u16,
+    /// Linux: play this computer's music through Spotify's Soloist receiver,
+    /// which streams lossless, instead of librespot at `bitrate`. Needs the
+    /// setup in `soloist.json`; without it, playback stays on librespot.
+    pub lossless: bool,
     pub normalisation: bool,
     pub autoplay: bool,
     pub gapless: bool,
@@ -484,6 +488,7 @@ impl Default for Settings {
         Self {
             device_name: "Spotifast".to_string(),
             bitrate: 320,
+            lossless: false,
             normalisation: false,
             autoplay: true,
             gapless: true,

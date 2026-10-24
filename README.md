@@ -1,3 +1,8 @@
+> **Spotilossless is a Linux Lossless fork of Spotifast.**
+> [Install this fork](#install-this-fork-on-linux) to get the Soloist integration.
+> The upstream download links and package commands below install ordinary
+> Spotifast without this fork's changes.
+
 <p align="center">
   <img src="docs/assets/images/logo.svg" alt="Spotifast logo" width="88" height="88">
 </p>
@@ -28,11 +33,14 @@ framework behind a family of native desktop apps. It plays music through
 The interface includes complete
 [translations for all supported languages](docs/_reference/translating.md#languages-and-coverage).
 
-This personal fork can supervise an already paired, separately installed Soloist
-receiver on Linux. Its controls use Spotify Connect, and its local playback
-events keep the player in sync without Web API player-state polls. An already
-running receiver at the default data directory can also be observed without
-setup. See [Linux Soloist setup](docs/_reference/settings-and-files.md#linux-soloist-receiver-personal-fork).
+This personal fork can play lossless on Linux through Soloist, Spotify's own
+player. Choose **Lossless** under **Settings > Playback > Audio quality**: a
+short guide downloads Soloist from Spotify and stores your own Soloist key in
+the keyring. Pair it once by selecting it in Spotify's app on the same local
+network, using the same account as Spotifast. This computer stays one device,
+and the player bar shows the quality Spotify reports. Soloist's sound skips
+Spotifast's equalizer, and Spotify stops each build after 90 days. See
+[Linux Soloist setup](docs/_reference/settings-and-files.md#linux-soloist-receiver-personal-fork).
 
 **Playback needs Spotify Premium.** Free accounts can browse and search, but
 cannot play music through Spotifast.
@@ -46,7 +54,7 @@ https://github.com/user-attachments/assets/a5f669ce-b3b7-4f8e-9933-976a78876c7e
 
 </details>
 
-[Features](#your-music-on-your-desktop) · [Install](#install) · [First playback](#start-listening) · [Mini player](#the-winamp-mini-player) · [MilkDrop](#music-in-motion) · [Help](#guides-and-help)
+[Features](#your-music-on-your-desktop) · [Install](#install-this-fork-on-linux) · [First playback](#start-listening) · [Mini player](#the-winamp-mini-player) · [MilkDrop](#music-in-motion) · [Help](#guides-and-help)
 
 ## Your music, on your desktop
 
@@ -64,7 +72,52 @@ https://github.com/user-attachments/assets/a5f669ce-b3b7-4f8e-9933-976a78876c7e
 While Soloist plays, the visualisers follow its PipeWire output; see
 [Soloist visualiser capture](docs/_reference/soloist-tap.md).
 
-## Install
+## Install this fork on Linux
+
+This fork's Soloist integration is tested on Linux. It needs Spotify Premium,
+PipeWire, and an unlocked Secret Service keyring. Each listener needs their own
+[Soloist key](https://developer.spotify.com/dashboard) and pairs the receiver
+once in Spotify's app on the same local network. Never share your key or
+Spotify credentials.
+
+1. Install [Rust](https://rustup.rs/) with toolchain 1.98 or newer. Install the
+   build dependencies for your distribution:
+
+   **Arch Linux:**
+
+   ```sh
+   sudo pacman -S --needed base-devel pkgconf alsa-lib pipewire libxkbcommon wayland cmake clang
+   ```
+
+   **Debian or Ubuntu:**
+
+   ```sh
+   sudo apt install build-essential pkg-config libasound2-dev libpipewire-0.3-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev cmake clang libclang-dev
+   ```
+
+   **Fedora:**
+
+   ```sh
+   sudo dnf install gcc gcc-c++ make pkgconf-pkg-config alsa-lib-devel pipewire-devel libxkbcommon-devel wayland-devel mesa-libGL-devel cmake clang clang-devel
+   ```
+
+2. Build and install this repository's `main` branch. This includes MilkDrop:
+
+   ```sh
+   cargo install --git https://github.com/vekhyat/spotilossless --branch main --locked --bin spotifast
+   ```
+
+3. Run `spotifast`. Complete the library sign-in and the separate local
+   playback approval described under [Start listening](#start-listening).
+
+4. Choose **Settings > Playback > Audio quality > Lossless**. Follow the guide
+   to download Soloist from Spotify, save your own key, and start the receiver.
+   Select the receiver name shown in the guide in Spotify's desktop or phone
+   app. Spotifast then shows one **(this computer)** device and the quality
+   Spotify reports. See [Linux Soloist setup](docs/_reference/settings-and-files.md#linux-soloist-receiver-personal-fork)
+   for updates and limitations, including the equalizer bypass.
+
+## Install upstream Spotifast
 
 | Platform | Installation |
 |---|---|

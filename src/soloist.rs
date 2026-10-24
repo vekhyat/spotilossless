@@ -116,6 +116,274 @@ pub fn setup(dirs: &AppDirs, mut config: Config, input: impl BufRead) -> Result<
     config.save(&dirs.soloist_file())
 }
 
+/// Stores a key typed into the setup guide. Blocking: Secret Service may wait
+/// for an unlock prompt, so call it off the UI thread.
+pub fn save_key(key: &str) -> Result<(), String> {
+    let key = ApiKey::parse(key.trim().as_bytes().to_vec())?;
+    crate::credentials::store_soloist_key(key.0.as_bytes()).map_err(|_| STORE_ERROR.to_string())
+}
+
+/// Spotify's own download for this computer. Spotify asks that Soloist is
+/// not redistributed, so it is fetched from here on the listener's request
+/// and never mirrored or bundled.
+pub fn download_url() -> Option<&'static str> {
+    match std::env::consts::ARCH {
+        "x86_64" => Some("https://soloist-builds.spotifycdn.com/soloist_release_x86_64.tar.gz"),
+        "aarch64" => Some("https://soloist-builds.spotifycdn.com/soloist_release_arm64.tar.gz"),
+        "arm" => Some("https://soloist-builds.spotifycdn.com/soloist_release_arm32.tar.gz"),
+        _ => None,
+    }
+}
+
+/// The Soloist page where listeners make their own key.
+pub const KEY_PAGE: &str = "https://developer.spotify.com/dashboard";
+
+/// Larger than any release so far (36 MB unpacked), small enough that a
+/// wrong answer cannot fill the disk.
+pub const DOWNLOAD_LIMIT: u64 = 128 * 1024 * 1024;
+
+/// Spotify stops a build this long after its build date (exit code 10).
+const LIFETIME_DAYS: i32 = 90;
+
+/// An installed build, read from `soloist --version`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Build {
+    pub version: String,
+    /// The first day Spotify no longer starts this build.
+    pub expires: jiff::civil::Date,
+}
+
+impl Build {
+    /// `soloist 1.3.10.13 build 1792778483 (20261023) (g19412df6ea) (linux/x86_64)`
+    fn parse(text: &str) -> Option<Self> {
+        let mut words = text.split_whitespace();
+        (words.next()? == "soloist").then_some(())?;
+        let version = words.next()?.to_owned();
+        let date = text
+            .split(['(', ')'])
+            .find(|part| part.len() == 8 && part.bytes().all(|byte| byte.is_ascii_digit()))?;
+        let built = jiff::civil::Date::new(
+            date[..4].parse().ok()?,
+            date[4..6].parse().ok()?,
+            date[6..].parse().ok()?,
+        )
+        .ok()?;
+        let expires = built
+            .checked_add(jiff::Span::new().days(LIFETIME_DAYS))
+            .ok()?;
+        Some(Self { version, expires })
+    }
+
+    /// Whole days left before Spotify stops this build; zero or less once it has.
+    pub fn days_left(&self, today: jiff::civil::Date) -> i32 {
+        self.expires.since(today).map_or(0, |span| span.get_days())
+    }
+}
+
+/// Runs the binary's `--version` with a short limit; an expired or foreign
+/// binary answers nothing usable.
+pub fn read_build(binary: &Path) -> Option<Build> {
+    let mut child = Command::new(binary)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut text = String::new();
+    std::io::Read::read_to_string(
+        &mut std::io::Read::take(child.stdout.take()?, 4096),
+        &mut text,
+    )
+    .ok()?;
+    Build::parse(&text)
+}
+
+/// What the setup guide shows. Read off the UI thread: it starts the
+/// binary and asks Secret Service.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Status {
+    pub config: Option<Config>,
+    pub build: Option<Build>,
+    pub key_saved: bool,
+    /// The receiver's Spotify Connect id, from its data directory once it
+    /// has run. Setup trusts only this id, never a name on the network.
+    pub device_id: Option<String>,
+    /// This computer's addresses: a receiver answering from elsewhere is
+    /// not the one Spotifast runs, whatever it claims.
+    pub local_addresses: Vec<std::net::IpAddr>,
+    /// Why the configuration could not be read, if it could not.
+    pub error: Option<String>,
+}
+
+impl Status {
+    pub fn ready(&self) -> bool {
+        self.build.is_some() && self.key_saved
+    }
+
+    /// Whether a receiver found on the network is this computer's Soloist,
+    /// and so belongs to this computer's setup guide.
+    pub fn is_own_receiver(&self, receiver: &crate::zeroconf::Receiver) -> bool {
+        let local =
+            receiver.address.is_loopback() || self.local_addresses.contains(&receiver.address);
+        !receiver.cast && local && self.device_id.is_some() && receiver.device_id == self.device_id
+    }
+}
+
+/// Soloist writes its Connect id, a UUID, to `.device_id` on first start.
+pub(crate) fn read_device_id(data_dir: &Path) -> Option<String> {
+    let mut text = String::new();
+    std::io::Read::read_to_string(
+        &mut std::io::Read::take(std::fs::File::open(data_dir.join(".device_id")).ok()?, 128),
+        &mut text,
+    )
+    .ok()?;
+    let id = text.trim();
+    let valid = (8..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-');
+    valid.then(|| id.to_owned())
+}
+
+pub fn status(dirs: &AppDirs) -> Status {
+    let (config, error) = match Config::load(&dirs.soloist_file()) {
+        Ok(config) => (config, None),
+        Err(error) => (None, Some(error)),
+    };
+    let build = config
+        .as_ref()
+        .and_then(|config| read_build(&config.binary));
+    let key_saved = crate::credentials::soloist_key().is_ok_and(|key| key.is_some());
+    let device_id = config
+        .as_ref()
+        .and_then(|config| read_device_id(&config.data_dir));
+    let local_addresses = if_addrs::get_if_addrs()
+        .map(|interfaces| interfaces.iter().map(if_addrs::Interface::ip).collect())
+        .unwrap_or_default();
+    Status {
+        config,
+        build,
+        key_saved,
+        device_id,
+        local_addresses,
+        error,
+    }
+}
+
+/// Where the setup guide keeps Soloist: its builds and, unless an earlier
+/// setup chose another one, its paired session.
+fn home(dirs: &AppDirs) -> PathBuf {
+    dirs.state.join("soloist")
+}
+
+/// A session paired before the setup guide existed, reused so the listener
+/// does not pair again.
+fn earlier_session() -> Option<PathBuf> {
+    let root = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+        })?;
+    let session = root.join("spotilossless/soloist/session");
+    session.join(".device_id").is_file().then_some(session)
+}
+
+/// Unpacks a downloaded archive into its own versioned folder and points
+/// `soloist.json` at it, keeping an earlier session and name. Blocking.
+/// Older builds are removed once the new one answers `--version`.
+pub fn install(dirs: &AppDirs, archive: &Path, device_name: &str) -> Result<Build, String> {
+    install_with(dirs, archive, device_name, earlier_session())
+}
+
+fn install_with(
+    dirs: &AppDirs,
+    archive: &Path,
+    device_name: &str,
+    earlier: Option<PathBuf>,
+) -> Result<Build, String> {
+    const FAILED: &str = "Couldn't unpack Soloist. Try the download again.";
+    let home = home(dirs);
+    let staging = home.join(format!("unpacking-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging)
+        .map_err(|_| "Couldn't create Soloist's folder. Check its permissions.".to_string())?;
+    let unpacked = Command::new("tar")
+        .arg("-xzf")
+        .arg(archive)
+        .arg("-C")
+        .arg(&staging)
+        .args(["--no-same-owner", "--no-same-permissions", "soloist"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    let binary = staging.join("soloist");
+    let usable =
+        unpacked && std::fs::symlink_metadata(&binary).is_ok_and(|meta| meta.file_type().is_file());
+    if !usable {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(FAILED.into());
+    }
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700));
+    }
+    let Some(build) = read_build(&binary) else {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err("Spotify's download did not run on this computer. Try again later.".into());
+    };
+    let folder = home.join(format!("build-{}", build.version));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::rename(&staging, &folder).map_err(|_| FAILED.to_string())?;
+    let previous = Config::load(&dirs.soloist_file()).ok().flatten();
+    let data_dir = match &previous {
+        Some(config) => config.data_dir.clone(),
+        None => earlier.unwrap_or_else(|| home.join("session")),
+    };
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|_| "Couldn't create Soloist's data folder. Check its permissions.".to_string())?;
+    let config = Config {
+        binary: folder.join("soloist"),
+        data_dir,
+        device_name: previous
+            .map(|config| config.device_name)
+            .unwrap_or_else(|| device_name.to_owned()),
+    };
+    config.validate()?;
+    std::fs::create_dir_all(&dirs.config)
+        .map_err(|_| "Couldn't create Spotifast's config directory.".to_string())?;
+    config.save(&dirs.soloist_file())?;
+    if let Ok(entries) = std::fs::read_dir(&home) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let old_build = name.to_str().is_some_and(|name| name.starts_with("build-"));
+            if old_build && entry.path() != folder {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    Ok(build)
+}
+
+/// The Connect name the setup guide gives Soloist, beside this computer's own.
+pub fn device_name_for(computer: &str) -> String {
+    format!("{} Lossless", computer.trim())
+}
+
 fn check_binary(config: &Config) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     let usable = std::fs::metadata(&config.binary)
@@ -131,6 +399,12 @@ fn check_binary(config: &Config) -> Result<(), String> {
 struct Snapshot {
     device_name: Option<String>,
     pid: Option<u32>,
+    /// What the receiver's own trace last said about its account; `None`
+    /// before it has said anything.
+    signed_in: Option<bool>,
+    /// Its Spotify Connect id from `<data_dir>/.device_id`, read off the UI
+    /// thread. The only way Soloist is recognised: names are not identities.
+    device_id: Option<String>,
 }
 
 /// Cheap, thread-safe access for the app and a PipeWire tap. PID is cleared on
@@ -143,39 +417,64 @@ impl Handle {
         self.0.read().unwrap_or_else(|p| p.into_inner()).pid
     }
 
-    /// Name matching identifies the configured receiver, not stream quality.
-    pub fn matches_device(&self, name: &str) -> bool {
-        let snapshot = self.0.read().unwrap_or_else(|p| p.into_inner());
-        name == snapshot
-            .device_name
-            .as_deref()
-            .unwrap_or("Spotilossless Soloist")
+    /// Whether the receiver says it has an account, from its local trace.
+    pub fn signed_in(&self) -> Option<bool> {
+        self.0.read().unwrap_or_else(|p| p.into_inner()).signed_in
     }
 
-    fn publish(&self, config: &Config, pid: Option<u32>) {
-        *self.0.write().unwrap_or_else(|p| p.into_inner()) = Snapshot {
-            device_name: Some(config.device_name.clone()),
-            pid,
-        };
+    pub fn device_id(&self) -> Option<String> {
+        self.0
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .device_id
+            .clone()
+    }
+
+    /// Whether a Connect device is this computer's Soloist, by its id. With
+    /// no id read yet nothing is, whatever it is called.
+    pub fn is_device(&self, id: Option<&str>) -> bool {
+        let snapshot = self.0.read().unwrap_or_else(|p| p.into_inner());
+        id.is_some() && id == snapshot.device_id.as_deref()
+    }
+
+    /// `device_id` comes from [`read_device_id`] on the publisher's thread.
+    /// A known id is kept when the receiver stops: it is still the same
+    /// device in the account.
+    fn publish(&self, config: &Config, pid: Option<u32>, device_id: Option<String>) {
+        let mut snapshot = self.0.write().unwrap_or_else(|p| p.into_inner());
+        if pid.is_none() || snapshot.pid != pid {
+            snapshot.signed_in = None;
+        }
+        snapshot.device_name = Some(config.device_name.clone());
+        snapshot.pid = pid;
+        if device_id.is_some() {
+            snapshot.device_id = device_id;
+        }
+    }
+
+    /// Tests and demo captures stand in for a receiver that has written its id.
+    #[cfg(any(test, feature = "demo"))]
+    pub(crate) fn assume_device_id(&self, id: &str) {
+        self.0.write().unwrap_or_else(|p| p.into_inner()).device_id = Some(id.into());
     }
 }
 
 /// Owns only its child. Dropping it never stops a reused external receiver.
 pub(crate) struct Supervisor {
-    pub handle: Handle,
     stopping: Arc<AtomicBool>,
     stop: mpsc::Sender<()>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Supervisor {
+    /// Reuses `handle`, so the app and tap keep one view across restarts.
     pub fn start(
         dirs: AppDirs,
+        handle: Handle,
         enabled: bool,
         report: impl Fn(String) + Clone + Send + 'static,
         changed: impl Fn() + Send + 'static,
     ) -> Self {
-        let handle = Handle::default();
         let stopping = Arc::new(AtomicBool::new(false));
         let (stop, receiver) = mpsc::channel();
         let thread = if enabled {
@@ -210,7 +509,6 @@ impl Supervisor {
             None
         };
         Self {
-            handle,
             stopping,
             stop,
             thread,
@@ -382,7 +680,24 @@ fn launch(config: &Config, key: &ApiKey) -> Result<OwnedChild, String> {
     // Soloist accepts its key only via argv, not stdin. Never format this
     // Command, inherit output, or log arguments. Linux process inspection can
     // still read argv; Secret Service protects the key only while at rest.
-    quiet_command(config)
+    let mut command = quiet_command(config);
+    // A receiver left behind by a Spotifast that was killed would be reused
+    // as someone else's by the next one, which then can never restart it
+    // with a new key. It ends with this thread, which outlives it anyway.
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: prctl is async-signal-safe and changes only the child.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+    }
+    command
         .arg("-n")
         .arg(&config.device_name)
         .arg("-k")
@@ -415,7 +730,7 @@ fn supervise(
     let mut key = None;
     let mut last_error = None;
     let publish = |pid| {
-        state.publish(&config, pid);
+        state.publish(&config, pid, read_device_id(&config.data_dir));
         changed();
     };
     publish(None);
@@ -438,6 +753,10 @@ fn supervise(
             notify("Soloist stopped. Its build may have expired (builds last about 90 days). Install a current build if restarting does not help. Spotifast will retry automatically.".into());
         }
         if process.is_some() {
+            // A first start writes its id a moment after launch.
+            if state.device_id().is_none() && read_device_id(&config.data_dir).is_some() {
+                publish(process.map(|process: Identity| process.pid));
+            }
             backoff.survived(began.elapsed());
         } else if Instant::now() >= next_try {
             // Recheck on every attempt: an external launcher may have started
@@ -545,6 +864,145 @@ mod tests {
     impl Drop for Scratch {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn build_date_gives_spotifys_ninety_day_expiry() {
+        let build = Build::parse(
+            "soloist 1.3.10.13 build 1792778483 (20261023) (g19412df6ea) (linux/x86_64)\n",
+        )
+        .unwrap();
+        assert_eq!(build.version, "1.3.10.13");
+        assert_eq!(build.expires, jiff::civil::date(2027, 1, 21));
+        assert_eq!(build.days_left(jiff::civil::date(2027, 1, 7)), 14);
+        assert_eq!(build.days_left(jiff::civil::date(2027, 1, 21)), 0);
+        assert!(build.days_left(jiff::civil::date(2027, 2, 1)) < 0);
+        for text in [
+            "",
+            "spotify 1.0 (20261023)",
+            "soloist 1.0 (2026-10-23)",
+            "soloist 1.0 (20261399)",
+        ] {
+            assert_eq!(Build::parse(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn install_points_setup_at_the_new_build_keeps_the_session_and_drops_old_builds() {
+        let scratch = Scratch::new();
+        let dirs = AppDirs {
+            config: scratch.0.join("config"),
+            state: scratch.0.join("state"),
+            cache: scratch.0.join("cache"),
+        };
+        let archive = |version: &str| {
+            let source = scratch.0.join(format!("source-{version}"));
+            std::fs::create_dir_all(&source).unwrap();
+            std::fs::write(
+                source.join("soloist"),
+                format!(
+                    "#!/bin/sh\necho 'soloist {version} build 1 (20261023) (g0) (linux/x86_64)'\n"
+                ),
+            )
+            .unwrap();
+            std::fs::write(source.join("CHANGELOG.md"), "").unwrap();
+            let archive = scratch.0.join(format!("{version}.tar.gz"));
+            assert!(
+                Command::new("tar")
+                    .arg("-czf")
+                    .arg(&archive)
+                    .arg("-C")
+                    .arg(&source)
+                    .args(["soloist", "CHANGELOG.md"])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            archive
+        };
+        let earlier = scratch.0.join("paired-session");
+        let build = install_with(
+            &dirs,
+            &archive("1.0"),
+            "Desk Lossless",
+            Some(earlier.clone()),
+        )
+        .unwrap();
+        assert_eq!(build.version, "1.0");
+        let first = Config::load(&dirs.soloist_file()).unwrap().unwrap();
+        assert_eq!(first.data_dir, earlier);
+        assert_eq!(first.device_name, "Desk Lossless");
+        assert!(first.binary.ends_with("build-1.0/soloist"));
+        assert!(
+            !first.binary.with_file_name("CHANGELOG.md").exists(),
+            "only the binary"
+        );
+
+        install_with(&dirs, &archive("2.0"), "Renamed", None).unwrap();
+        let second = Config::load(&dirs.soloist_file()).unwrap().unwrap();
+        assert_eq!(second.data_dir, first.data_dir, "the paired session stays");
+        assert_eq!(second.device_name, "Desk Lossless");
+        assert!(second.binary.ends_with("build-2.0/soloist"));
+        assert!(!first.binary.exists(), "the old build is removed");
+        assert_eq!(read_build(&second.binary).unwrap().version, "2.0");
+
+        let broken = scratch.0.join("broken.tar.gz");
+        std::fs::write(&broken, "not an archive").unwrap();
+        assert!(install_with(&dirs, &broken, "Desk", None).is_err());
+        assert_eq!(Config::load(&dirs.soloist_file()).unwrap().unwrap(), second);
+    }
+
+    #[test]
+    fn only_this_computers_receiver_with_soloists_own_id_belongs_to_the_guide() {
+        let scratch = Scratch::new();
+        assert_eq!(read_device_id(&scratch.0), None);
+        let id = "0f0e0d0c-0b0a-4908-8706-050403020100";
+        std::fs::write(scratch.0.join(".device_id"), format!("{id}\n")).unwrap();
+        assert_eq!(read_device_id(&scratch.0).as_deref(), Some(id));
+        let receiver = |address: [u8; 4], device_id: &str| crate::zeroconf::Receiver {
+            name: "Spotifast Lossless".into(),
+            device_id: Some(device_id.into()),
+            address: std::net::IpAddr::from(address),
+            port: 4070,
+            path: "/".into(),
+            cast: false,
+        };
+        let status = Status {
+            device_id: Some(id.into()),
+            local_addresses: vec![std::net::IpAddr::from([192, 168, 1, 20])],
+            ..Default::default()
+        };
+        assert!(status.is_own_receiver(&receiver([127, 0, 0, 1], id)));
+        assert!(status.is_own_receiver(&receiver([192, 168, 1, 20], id)));
+        assert!(
+            !status.is_own_receiver(&receiver([192, 168, 1, 99], id)),
+            "same id from another machine"
+        );
+        assert!(
+            !status.is_own_receiver(&receiver([127, 0, 0, 1], "another-id")),
+            "same name, another receiver"
+        );
+        let unknown = Status {
+            device_id: None,
+            ..status.clone()
+        };
+        assert!(!unknown.is_own_receiver(&receiver([127, 0, 0, 1], id)));
+        for bad in [
+            "",
+            "short",
+            "not hex at all, but long enough!!",
+            &"a".repeat(65),
+        ] {
+            std::fs::write(scratch.0.join(".device_id"), bad).unwrap();
+            assert_eq!(read_device_id(&scratch.0), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_typed_key_is_trimmed_and_checked_before_it_is_stored() {
+        for key in ["", "   ", "a\u{7}b"] {
+            assert!(save_key(key).is_err());
         }
     }
 
@@ -673,24 +1131,65 @@ mod tests {
     }
 
     #[test]
-    fn handle_tracks_pid_and_exact_configured_name() {
+    fn a_launched_receiver_ends_with_the_thread_that_started_it() {
+        let scratch = Scratch::new();
+        let config = scratch.script("exec sleep 30");
+        let pid = std::thread::spawn(move || {
+            let child = launch(&config, &ApiKey("dummy-key".into())).unwrap();
+            let pid = child.0.id();
+            // Skips `OwnedChild`'s kill, as a killed Spotifast would.
+            std::mem::forget(child);
+            pid
+        })
+        .join()
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let ended = loop {
+            let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+            let running = state
+                .rsplit(')')
+                .next()
+                .and_then(|rest| rest.split_whitespace().next())
+                .is_some_and(|state| state != "Z");
+            if !running || Instant::now() >= deadline {
+                break !running;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // SAFETY: `pid` is this process's own child, reaped once here.
+        unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), 0) };
+        assert!(ended, "the receiver outlived the thread that started it");
+    }
+
+    #[test]
+    fn handle_knows_soloist_by_its_id_never_by_its_name() {
         let scratch = Scratch::new();
         let mut config = scratch.config();
         config.device_name = "My receiver".into();
         let handle = Handle::default();
-        assert!(handle.matches_device("Spotilossless Soloist"));
-        assert!(!handle.matches_device(&config.device_name));
-        handle.publish(&config, Some(123));
-        assert!(handle.matches_device(&config.device_name));
-        assert!(!handle.matches_device("another receiver"));
+        assert!(!handle.is_device(Some("soloist-id")), "no id read yet");
+        assert!(!handle.is_device(None));
+        handle.publish(&config, Some(123), None);
+        assert!(
+            !handle.is_device(Some("soloist-id")),
+            "a running name is not an id"
+        );
+        handle.publish(&config, Some(123), Some("soloist-id".into()));
+        assert!(handle.is_device(Some("soloist-id")));
+        assert!(!handle.is_device(Some("another-id")));
+        assert!(!handle.is_device(None));
         assert_eq!(handle.clone().pid(), Some(123));
-        handle.publish(&config, None);
+        handle.publish(&config, None, None);
         assert_eq!(handle.pid(), None);
-        assert!(handle.matches_device(&config.device_name));
+        assert!(
+            handle.is_device(Some("soloist-id")),
+            "still the account's device"
+        );
     }
 
     struct RunningFixture {
         supervisor: Supervisor,
+        handle: Handle,
         changed: mpsc::Receiver<(Option<u32>, Instant)>,
         reports: Arc<Mutex<Vec<String>>>,
     }
@@ -722,8 +1221,8 @@ mod tests {
             );
         });
         RunningFixture {
+            handle: state,
             supervisor: Supervisor {
-                handle: state,
                 stopping,
                 stop,
                 thread: Some(thread),
@@ -748,6 +1247,7 @@ mod tests {
         let config = scratch.script("sleep 0.2\nexit 42");
         let RunningFixture {
             mut supervisor,
+            handle,
             changed,
             reports,
         } = run_fixture(config, |_| Ok(Some(ApiKey("dummy-sensitive-key".into()))));
@@ -756,7 +1256,7 @@ mod tests {
         assert_ne!(first, second);
         assert!(later.duration_since(at) >= Duration::from_secs(1));
         supervisor.shutdown();
-        assert_eq!(supervisor.handle.pid(), None);
+        assert_eq!(handle.pid(), None);
         assert_eq!(identity(second), None);
         let reports = reports.lock().unwrap();
         assert_eq!(
@@ -784,6 +1284,7 @@ mod tests {
         let before = existing(&config).expect("live receiver with matching data directory");
         let RunningFixture {
             mut supervisor,
+            handle,
             changed,
             ..
         } = run_fixture(config, |_| {
@@ -792,7 +1293,7 @@ mod tests {
         let (pid, _) = next_pid(&changed);
         assert_eq!(pid, before.pid);
         supervisor.shutdown();
-        assert_eq!(supervisor.handle.pid(), None);
+        assert_eq!(handle.pid(), None);
         assert_eq!(
             identity(pid),
             Some(before),

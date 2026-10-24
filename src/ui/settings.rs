@@ -642,7 +642,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ),
         RowText::new(
             gettext(locale, "Audio quality"),
-            gettext(locale, "Higher bitrates use more data and cache space."),
+            if cfg!(target_os = "linux") && app.settings.lossless {
+                lossless_detail(app)
+            } else {
+                gettext(locale, "Higher bitrates use more data and cache space.")
+            },
         ),
         RowText::new(
             normalize_volume.clone(),
@@ -764,11 +768,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             });
             // Normal to Very high, left to right when side by side and top
             // to bottom in a column.
-            let choices = [
-                (96u16, gettext(locale, "Normal · 96 kbps")),
-                (160, gettext(locale, "High · 160 kbps")),
-                (320, gettext(locale, "Very high · 320 kbps")),
-            ];
+            // `None` is Lossless, which plays through Spotify's Soloist (Linux).
+            let choices: Vec<_> = [
+                (Some(96u16), gettext(locale, "Normal · 96 kbps")),
+                (Some(160), gettext(locale, "High · 160 kbps")),
+                (Some(320), gettext(locale, "Very high · 320 kbps")),
+            ]
+            .into_iter()
+            .chain(
+                cfg!(target_os = "linux")
+                    .then(|| (None, pgettext(locale, "audio quality", "Lossless"))),
+            )
+            .collect();
             let choice_gap = 6.0;
             let choices_width = choices
                 .iter()
@@ -783,20 +794,31 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 &playback_rows[2],
                 choices_width,
                 |ui| {
-                    let mut choose = |ui: &mut egui::Ui, kbps: u16, label: &str| {
-                        if theme::soft_button(
-                            ui,
-                            &palette,
-                            None,
-                            label,
-                            app.settings.bitrate == kbps,
-                        )
-                        .clicked()
-                            && app.settings.bitrate != kbps
-                        {
-                            app.settings.bitrate = kbps;
-                            changed = true;
-                            playback_dirty = true;
+                    let mut choose = |ui: &mut egui::Ui, kbps: Option<u16>, label: &str| {
+                        let lossless = app.settings.lossless;
+                        let chosen = match kbps {
+                            Some(kbps) => !lossless && app.settings.bitrate == kbps,
+                            None => lossless,
+                        };
+                        if !theme::soft_button(ui, &palette, None, label, chosen).clicked() {
+                            return;
+                        }
+                        match kbps {
+                            #[cfg(target_os = "linux")]
+                            None => app.actions.push(Action::ChooseLossless),
+                            #[cfg(not(target_os = "linux"))]
+                            None => {}
+                            Some(kbps) => {
+                                if lossless {
+                                    app.settings.lossless = false;
+                                    changed = true;
+                                }
+                                if app.settings.bitrate != kbps {
+                                    app.settings.bitrate = kbps;
+                                    changed = true;
+                                    playback_dirty = true;
+                                }
+                            }
                         }
                     };
                     if ui.available_width() >= choices_width {
@@ -2603,6 +2625,26 @@ fn eq_curve(ui: &mut egui::Ui, palette: &Palette, settings: &crate::eq::EqSettin
     for (hz, db) in crate::eq::BANDS.iter().zip(settings.bands_db) {
         painter.circle_filled(pos2(x_of(*hz), y_of(db + settings.preamp_db)), 3.0, color);
     }
+}
+
+/// Lossless is a choice, not a promise: when Soloist cannot play, say what
+/// plays instead. The player bar shows the quality Spotify reports.
+fn lossless_detail(app: &App) -> std::borrow::Cow<'static, str> {
+    let locale = app.locale;
+    #[cfg(target_os = "linux")]
+    if app.lossless_device().is_none() {
+        // Translators: {kbps} is a bitrate such as 320. Soloist is the name of Spotify's player.
+        return gettext(
+            locale,
+            "Soloist isn't playing right now, so music on this computer plays at {kbps} kbps. Choose Lossless again to set it up or reconnect.",
+        )
+        .replace("{kbps}", &app.settings.bitrate.to_string())
+        .into();
+    }
+    gettext(
+        locale,
+        "Plays through Spotify's Soloist. Choose Lossless again to update or reconnect it.",
+    )
 }
 
 #[cfg(test)]

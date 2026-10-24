@@ -474,9 +474,16 @@ because the session belongs to it. Playback state is still read from the Web
 API, which reports a restricted device while it plays.
 
 In this personal fork on Linux, Soloist is also treated as Connect-only, even
-without Spotify's restricted flag. While its local WebSocket trace is live,
+without Spotify's restricted flag. It is recognised by the Connect id in its
+data directory, never by its name. When **Lossless** is chosen, the setup
+guide downloads Spotify's Soloist archive from `soloist-builds.spotifycdn.com`
+on request. The listener pairs it once by selecting it in Spotify's app on
+the same local network, with the account used in Spotifast. The guide waits
+for Soloist's id to appear in that account; it does not send the playback
+credential through `addUser`, whose accepted reply does not sign Soloist in.
+Soloist restores the saved session on later starts. While its local WebSocket trace is live,
 now-playing updates and player-state polls use that feed rather than the Web
-API. The receiver's name must match one device in the signed-in playback
+API. The receiver's id must match one device in the signed-in playback
 session. See [Soloist setup](/settings-and-files/#linux-soloist-receiver-personal-fork)
 for discovery without configuration and the local process checks.
 

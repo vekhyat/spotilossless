@@ -16,6 +16,26 @@ enum OutputRow {
     Receiver(crate::zeroconf::Receiver),
 }
 
+/// Network receivers get a row only when no computer or Connect row already
+/// represents them. This includes this computer's Soloist while pairing.
+fn output_rows(
+    devices: Vec<Device>,
+    receivers: &[crate::zeroconf::Receiver],
+    represented: impl Fn(&crate::zeroconf::Receiver) -> bool,
+) -> Vec<OutputRow> {
+    let waiting: Vec<_> = receivers
+        .iter()
+        .filter(|receiver| !receiver_is_listed(receiver, &devices) && !represented(receiver))
+        .cloned()
+        .map(OutputRow::Receiver)
+        .collect();
+    devices
+        .into_iter()
+        .map(OutputRow::Device)
+        .chain(waiting)
+        .collect()
+}
+
 impl OutputRow {
     /// Spotify's transfer identity, used to keep the active output first.
     fn identity(&self) -> Option<&str> {
@@ -442,6 +462,14 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                         },
                     );
                 }
+                // With Lossless on, Soloist is this computer: one row, not two.
+                #[cfg(target_os = "linux")]
+                let lossless = app.lossless_device();
+                #[cfg(not(target_os = "linux"))]
+                let lossless: Option<String> = None;
+                if lossless.is_some() {
+                    devices.retain(|device| local_id.is_none() || device.id != local_id);
+                }
                 let active_id = match app.target() {
                     crate::app::Target::Local => local_id.clone(),
                     crate::app::Target::Remote(id) => id,
@@ -467,18 +495,17 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                 // Receivers on the network that Spotify has not listed yet.
                 // They are real speakers the user can see in the official
                 // client, so offering them here is the whole point.
-                let waiting: Vec<crate::zeroconf::Receiver> = app
-                    .receivers
-                    .iter()
-                    .filter(|receiver| !receiver_is_listed(receiver, &devices))
-                    .cloned()
-                    .collect();
-
-                let mut rows: Vec<_> = devices
-                    .into_iter()
-                    .map(OutputRow::Device)
-                    .chain(waiting.into_iter().map(OutputRow::Receiver))
-                    .collect();
+                #[cfg(target_os = "linux")]
+                let pairing_here = app.lossless_wanted() && app.local_ready && lossless.is_none();
+                #[cfg(not(target_os = "linux"))]
+                let pairing_here = false;
+                let mut rows = output_rows(devices, &app.receivers, |receiver| {
+                    #[cfg(target_os = "linux")]
+                    return pairing_here && local_id.is_some() && app.lossless.status.as_ref()
+                        .is_some_and(|status| status.is_own_receiver(receiver));
+                    #[cfg(not(target_os = "linux"))]
+                    { let _ = receiver; false }
+                });
                 rank_outputs(
                     &mut rows,
                     &app.device_history,
@@ -521,12 +548,20 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                     }
                                     return;
                                 };
-                                let is_local = device.id.is_some() && device.id == local_id;
+                                let is_lossless = device.id.is_some() && device.id == lossless;
+                                let is_local =
+                                    is_lossless || (device.id.is_some() && device.id == local_id);
+                                let needs_pairing = pairing_here && is_local;
                                 let active = device.id.is_some() && device.id == active_id;
                                 let name = if is_local {
+                                    let own = if is_lossless {
+                                        &app.settings.device_name
+                                    } else {
+                                        &device.name
+                                    };
                                     // Translators: {name} is the name this computer uses in Spotify Connect.
                                     gettext(locale, "{name} (this computer)")
-                                        .replace("{name}", &device.name)
+                                        .replace("{name}", own)
                                 } else {
                                     device.name.clone()
                                 };
@@ -560,7 +595,9 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                     color,
                                 );
                                 let id = device.id.as_deref().unwrap_or_default();
-                                let status = if active {
+                                let status = if needs_pairing {
+                                    gettext(locale, "Finish Lossless setup").into_owned()
+                                } else if active {
                                     // The quality the device itself reports, as Spotify's own picker shows it.
                                     app.reported_quality()
                                         .filter(|reported| reported.device_id == id)
@@ -575,6 +612,9 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                     )
                                 {
                                     gettext(locale, "Lossless available").into_owned()
+                                } else if is_lossless {
+                                    // Only the device's own report says Lossless; see above.
+                                    gettext(locale, "Play here").into_owned()
                                 } else if device.is_restricted {
                                     gettext(locale, "Restricted").into_owned()
                                 } else if is_local {
@@ -597,8 +637,12 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                     let dot = pos2(rect.right() - 16.0, rect.center().y);
                                     ui.painter().circle_filled(dot, 4.0, palette.accent);
                                 }
+                                #[cfg(target_os = "linux")]
+                                if response.clicked() && needs_pairing {
+                                    app.actions.push(Action::ChooseLossless);
+                                }
                                 if response.clicked()
-                                    && !active
+                                    && !needs_pairing && !active
                                     && let Some(id) = &device.id
                                 {
                                     app.actions.push(Action::Transfer(id.clone()));
@@ -628,6 +672,47 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn this_computers_unpaired_soloist_has_no_second_speaker_row() {
+        let own = crate::zeroconf::Receiver {
+            name: "Spotifast Lossless".into(),
+            device_id: Some("soloist".into()),
+            address: "127.0.0.1".parse().unwrap(),
+            port: 4070,
+            path: "/".into(),
+            cast: false,
+        };
+        let namesake = crate::zeroconf::Receiver {
+            device_id: Some("other-speaker".into()),
+            ..own.clone()
+        };
+        let status = crate::soloist::Status {
+            device_id: own.device_id.clone(),
+            ..Default::default()
+        };
+        let computer = Device {
+            id: Some("local".into()),
+            kind: "computer".into(),
+            ..Default::default()
+        };
+        let receivers = [own, namesake];
+        let rows = output_rows(vec![computer.clone()], &receivers, |receiver| {
+            status.is_own_receiver(receiver)
+        });
+        assert_eq!(
+            rows.iter().map(OutputRow::identity).collect::<Vec<_>>(),
+            [Some("local"), Some("other-speaker")]
+        );
+        assert!(matches!(rows[0], OutputRow::Device(_)));
+        let rows = output_rows(vec![computer], &receivers, |_| false);
+        assert_eq!(
+            rows.len(),
+            3,
+            "without a computer row representing Soloist it stays visible"
+        );
+    }
 
     #[test]
     fn active_then_frequent_outputs_rank_across_both_kinds_of_row() {
