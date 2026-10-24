@@ -108,6 +108,16 @@ impl Controller {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn observe_connect_devices(&self, devices: &[Device]) {
+        self.observe_devices(devices);
+        self.known().active_restricted = devices
+            .iter()
+            .find(|device| device.is_active)
+            .filter(|device| device.is_restricted)
+            .and_then(|device| device.id.clone());
+    }
+
     /// An explicit target takes precedence over the last active device.
     pub fn restricted_target(&self, device_id: Option<&str>) -> Option<String> {
         let known = self.known();

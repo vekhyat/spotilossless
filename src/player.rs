@@ -604,6 +604,23 @@ impl Engine {
         &self.device_id
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn connect_devices(&self) -> Vec<crate::api::models::Device> {
+        self.spirc
+            .watch_cluster_state()
+            .borrow()
+            .devices
+            .values()
+            .map(|device| crate::api::models::Device {
+                id: Some(device.device_id.clone()),
+                name: device.device_alias.clone(),
+                is_active: device.is_active,
+                volume_percent: Some((device.volume.min(65535) * 100 / 65535) as u8),
+                ..Default::default()
+            })
+            .collect()
+    }
+
     /// What this engine is heard at, kept past the engine itself: the next
     /// engine starts there.
     pub(crate) fn heard(&self) -> Heard {

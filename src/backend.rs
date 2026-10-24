@@ -1212,6 +1212,8 @@ impl Backend {
                 move || change_waker.wake(),
             )
         };
+        #[cfg(target_os = "linux")]
+        let soloist_handle = soloist.handle.clone();
         let thread = std::thread::Builder::new()
             .name("spotifast-backend".to_string())
             .spawn(move || {
@@ -1228,6 +1230,10 @@ impl Backend {
                         waker,
                     );
                     if restore_sign_in {
+                        #[cfg(target_os = "linux")]
+                        {
+                            worker.soloist = soloist_handle;
+                        }
                         worker.restore_session();
                     }
                     worker.run(command_rx).await;
@@ -1779,6 +1785,8 @@ impl PlaylistHeaderLookup {
 }
 
 struct Worker {
+    #[cfg(target_os = "linux")]
+    soloist: crate::soloist::Handle,
     dirs: AppDirs,
     credentials: CredentialStore,
     web_tokens: [Option<Arc<WebTokens>>; 2],
@@ -1908,6 +1916,8 @@ impl Worker {
             credentials: CredentialStore::new(dirs.clone()),
             #[cfg(test)]
             credentials: CredentialStore::in_memory(dirs.clone()),
+            #[cfg(target_os = "linux")]
+            soloist: crate::soloist::Handle::default(),
             web_tokens: [None, None],
             playback_grant: None,
             pending_playback_grant: None,
@@ -2337,7 +2347,7 @@ impl Worker {
                 Command::ApiFinished {
                     generation,
                     home_account,
-                    response,
+                    mut response,
                     expired,
                     shared_lease,
                     personal_lease,
@@ -2391,19 +2401,7 @@ impl Worker {
                             user.product.as_deref().map(|product| product == "premium"),
                         );
                     }
-                    match response.as_ref() {
-                        ApiResponse::Devices(Ok(devices)) => self.connect.observe_devices(devices),
-                        ApiResponse::PlaybackState {
-                            seq,
-                            result: Ok(state),
-                        } => {
-                            self.connect.observe_playing(
-                                *seq,
-                                state.as_ref().and_then(|state| state.device.as_ref()),
-                            );
-                        }
-                        _ => {}
-                    }
+                    self.observe_connect_response(&mut response);
                     if let ApiResponse::MadeForYou {
                         result, top_mixes, ..
                     } = response.as_ref()
@@ -4646,7 +4644,44 @@ impl Worker {
     }
 
     /// Cancel requests on sign-out and report completion under their original generation.
+    fn observe_connect_response(&self, response: &mut ApiResponse) {
+        let classify = |device: &mut Device| {
+            #[cfg(target_os = "linux")]
+            if self.soloist.matches_device(&device.name) {
+                device.is_restricted = true;
+            }
+            let _ = device;
+        };
+        match response {
+            ApiResponse::Devices(Ok(devices)) => {
+                devices.iter_mut().for_each(classify);
+                self.connect.observe_devices(devices);
+            }
+            ApiResponse::PlaybackState {
+                seq,
+                result: Ok(state),
+            } => {
+                if let Some(device) = state.as_mut().and_then(|state| state.device.as_mut()) {
+                    classify(device);
+                }
+                self.connect
+                    .observe_playing(*seq, state.as_ref().and_then(|state| state.device.as_ref()));
+            }
+            _ => {}
+        }
+    }
+
     fn dispatch(&self, request: ApiRequest) -> tokio::task::AbortHandle {
+        #[cfg(target_os = "linux")]
+        if let Some(engine) = self.engine.as_ref().filter(|engine| {
+            same_account(&engine.session().username(), self.api.account().as_ref())
+        }) {
+            let mut devices = engine.connect_devices();
+            for device in &mut devices {
+                device.is_restricted |= self.soloist.matches_device(&device.name);
+            }
+            self.connect.observe_connect_devices(&devices);
+        }
         let api = Arc::clone(&self.api);
         let made_for_you = Arc::clone(&self.made_for_you);
         let new_releases = Arc::clone(&self.new_releases);
@@ -7563,6 +7598,35 @@ mod authorization_tests {
         assert_eq!(worker.connect.restricted_target(None), None);
         assert_eq!(worker.connect.restricted_target(Some("sonos")), None);
         assert_eq!(worker.connect.restricted_target(Some("late-speaker")), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn soloist_without_configuration_or_restricted_flag_uses_connect() {
+        let (_runtime, worker, _) = worker("soloist-connect");
+        let device = Device {
+            id: Some("soloist".into()),
+            name: "Spotilossless Soloist".into(),
+            is_active: true,
+            ..Default::default()
+        };
+        worker.observe_connect_response(&mut ApiResponse::Devices(Ok(vec![device.clone()])));
+        assert_eq!(
+            worker.connect.restricted_target(Some("soloist")).as_deref(),
+            Some("soloist")
+        );
+        worker.observe_connect_response(&mut ApiResponse::PlaybackState {
+            seq: 1,
+            result: Ok(Some(PlaybackState {
+                device: Some(device),
+                ..Default::default()
+            })),
+        });
+        assert_eq!(
+            worker.connect.restricted_target(None).as_deref(),
+            Some("soloist")
+        );
+        assert_eq!(worker.connect.restricted_target(Some("phone")), None);
     }
 
     #[test]

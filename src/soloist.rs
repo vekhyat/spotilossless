@@ -143,12 +143,11 @@ impl Handle {
 
     /// Name matching identifies the configured receiver, not stream quality.
     pub fn matches_device(&self, name: &str) -> bool {
-        self.0
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
+        let snapshot = self.0.read().unwrap_or_else(|p| p.into_inner());
+        name == snapshot
             .device_name
             .as_deref()
-            == Some(name)
+            .unwrap_or("Spotilossless Soloist")
     }
 
     fn publish(&self, config: &Config, pid: Option<u32>) {
@@ -674,8 +673,10 @@ mod tests {
     #[test]
     fn handle_tracks_pid_and_exact_configured_name() {
         let scratch = Scratch::new();
-        let config = scratch.config();
+        let mut config = scratch.config();
+        config.device_name = "My receiver".into();
         let handle = Handle::default();
+        assert!(handle.matches_device("Spotilossless Soloist"));
         assert!(!handle.matches_device(&config.device_name));
         handle.publish(&config, Some(123));
         assert!(handle.matches_device(&config.device_name));

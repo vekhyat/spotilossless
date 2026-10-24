@@ -696,8 +696,11 @@ unset soloist_key
 Restart Spotifast. Choose **Spotilossless Soloist · Lossless** in the device
 menu. The label identifies the configured receiver; it does not verify the
 current stream's quality. Use a unique device name. Playback controls use the
-existing Spotify Connect connection, including its normal state polling and
-account requirements. No playback transfer happens automatically.
+existing Spotify Connect connection and account requirements. Soloist commands,
+transfers, queue additions and shuffle-play use the session's Connect route,
+even when Spotify does not flag the receiver as restricted. The default exact
+name **Spotilossless Soloist** is recognised without `soloist.json`; a configured
+name takes its place after setup. No playback transfer happens automatically.
 
 `soloist.json` in Spotifast's config directory stores only `binary`, `data_dir`
 and `device_name`. Older files without `device_name` use **Spotilossless
