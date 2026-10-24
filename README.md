@@ -29,7 +29,10 @@ The interface includes complete
 [translations for all supported languages](docs/_reference/translating.md#languages-and-coverage).
 
 This personal fork can supervise an already paired, separately installed Soloist
-receiver on Linux. See [Linux Soloist setup](docs/_reference/settings-and-files.md#linux-soloist-receiver-personal-fork).
+receiver on Linux. Its controls use Spotify Connect, and its local playback
+events keep the player in sync without Web API player-state polls. An already
+running receiver at the default data directory can also be observed without
+setup. See [Linux Soloist setup](docs/_reference/settings-and-files.md#linux-soloist-receiver-personal-fork).
 
 **Playback needs Spotify Premium.** Free accounts can browse and search, but
 cannot play music through Spotifast.

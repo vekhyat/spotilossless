@@ -672,6 +672,11 @@ pub fn autostart() -> fastframe_autostart::Autostart {
 }
 
 pub enum Command {
+    #[cfg(target_os = "linux")]
+    SoloistFeed {
+        state: Option<Box<PlaybackState>>,
+        received_at: Instant,
+    },
     OpenThemesFolder,
     /// Read or change the login registration, off the UI thread: it reads
     /// and writes a file, the registry or D-Bus, and the Flatpak portal may
@@ -934,6 +939,11 @@ pub struct LyricsRequest {
 }
 
 pub enum Event {
+    #[cfg(target_os = "linux")]
+    SoloistPlayback {
+        state: Box<PlaybackState>,
+        received_at: Instant,
+    },
     /// The folder picked in the local files dialog; `None` when cancelled.
     LocalFilesFolderChosen(Option<std::path::PathBuf>),
     /// The songs in `folder`, by the `spotify:local:` URIs they play for.
@@ -1233,6 +1243,7 @@ impl Backend {
                         #[cfg(target_os = "linux")]
                         {
                             worker.soloist = soloist_handle;
+                            worker.observe_soloist = true;
                         }
                         worker.restore_session();
                     }
@@ -1787,6 +1798,10 @@ impl PlaylistHeaderLookup {
 struct Worker {
     #[cfg(target_os = "linux")]
     soloist: crate::soloist::Handle,
+    #[cfg(target_os = "linux")]
+    soloist_state: Option<(PlaybackState, Instant)>,
+    #[cfg(target_os = "linux")]
+    observe_soloist: bool,
     dirs: AppDirs,
     credentials: CredentialStore,
     web_tokens: [Option<Arc<WebTokens>>; 2],
@@ -1918,6 +1933,10 @@ impl Worker {
             credentials: CredentialStore::in_memory(dirs.clone()),
             #[cfg(target_os = "linux")]
             soloist: crate::soloist::Handle::default(),
+            #[cfg(target_os = "linux")]
+            soloist_state: None,
+            #[cfg(target_os = "linux")]
+            observe_soloist: false,
             web_tokens: [None, None],
             playback_grant: None,
             pending_playback_grant: None,
@@ -2112,6 +2131,21 @@ impl Worker {
     }
 
     async fn run(&mut self, mut commands: mpsc::UnboundedReceiver<Command>) {
+        #[cfg(target_os = "linux")]
+        let soloist_feed = (self.observe_soloist && !cfg!(test)).then(|| {
+            let commands = self.commands.clone();
+            tokio::spawn(crate::soloist::feed::run(
+                self.dirs.clone(),
+                self.soloist.clone(),
+                move |update, received_at| {
+                    let state = match update {
+                        Some(crate::soloist::feed::Update::Playback(state)) => Some(state),
+                        _ => None,
+                    };
+                    let _ = commands.send(Command::SoloistFeed { state, received_at });
+                },
+            ))
+        });
         let (cache_writes, cache_write_receiver) = mpsc::channel(1);
         let cache_writer = tokio::spawn(store_playlist_caches(
             cache_write_receiver,
@@ -2134,6 +2168,20 @@ impl Worker {
                 continue;
             }
             match command {
+                #[cfg(target_os = "linux")]
+                Command::SoloistFeed { state, received_at } => {
+                    self.soloist_state = state.map(|state| (*state, received_at));
+                    if let Some(state) = self.soloist_playback() {
+                        if let Some(device) = &state.device {
+                            self.connect
+                                .observe_connect_devices(std::slice::from_ref(device));
+                        }
+                        self.emit(Event::SoloistPlayback {
+                            state: Box::new(state),
+                            received_at,
+                        });
+                    }
+                }
                 Command::ListOutputDevices => {
                     let events = self.events.clone();
                     let waker = self.waker.clone();
@@ -2400,6 +2448,12 @@ impl Worker {
                         self.on_account_checked(
                             user.product.as_deref().map(|product| product == "premium"),
                         );
+                    }
+                    #[cfg(target_os = "linux")]
+                    if let ApiResponse::PlaybackState { result, .. } = response.as_mut()
+                        && let Some(state) = self.soloist_playback()
+                    {
+                        *result = Ok(Some(state));
                     }
                     self.observe_connect_response(&mut response);
                     if let ApiResponse::MadeForYou {
@@ -2811,6 +2865,11 @@ impl Worker {
         }
         self.stop_kept_player();
         drop(cache_writes);
+        #[cfg(target_os = "linux")]
+        if let Some(feed) = soloist_feed {
+            feed.abort();
+            let _ = feed.await;
+        }
         let _ = cache_writer.await;
     }
 
@@ -3256,6 +3315,10 @@ impl Worker {
 
     /// Cancels in-flight account work and drops cached Home data on sign-out.
     fn sign_out(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            self.soloist_state = None;
+        }
         self.spotify_restore_started = true;
         self.cancel_search();
         self.signed_in = false;
@@ -4643,7 +4706,18 @@ impl Worker {
         self.search_tasks.push(self.dispatch(request));
     }
 
-    /// Cancel requests on sign-out and report completion under their original generation.
+    #[cfg(target_os = "linux")]
+    fn soloist_playback(&self) -> Option<PlaybackState> {
+        if !self.signed_in {
+            return None;
+        }
+        let engine = self.engine.as_ref().filter(|engine| {
+            same_account(&engine.session().username(), self.api.account().as_ref())
+        })?;
+        let (state, received_at) = self.soloist_state.as_ref()?;
+        soloist_playback(state, *received_at, &engine.connect_devices())
+    }
+
     fn observe_connect_response(&self, response: &mut ApiResponse) {
         let classify = |device: &mut Device| {
             #[cfg(target_os = "linux")]
@@ -4671,7 +4745,14 @@ impl Worker {
         }
     }
 
+    /// Cancel requests on sign-out and report completion under their original generation.
     fn dispatch(&self, request: ApiRequest) -> tokio::task::AbortHandle {
+        #[cfg(target_os = "linux")]
+        let soloist_state = if matches!(request, ApiRequest::PlaybackState { .. }) {
+            self.soloist_playback()
+        } else {
+            None
+        };
         #[cfg(target_os = "linux")]
         if let Some(engine) = self.engine.as_ref().filter(|engine| {
             same_account(&engine.session().username(), self.api.account().as_ref())
@@ -4702,6 +4783,10 @@ impl Worker {
             let (response, expired) = tokio::select! {
                 _ = session.changed() => return,
                 result = async {
+                    #[cfg(target_os = "linux")]
+                    if let Some(state) = soloist_state && let ApiRequest::PlaybackState { seq } = request {
+                        return (ApiResponse::PlaybackState { seq, result: Ok(Some(state)) }, Vec::new());
+                    }
                     handle(&api, &made_for_you, &new_releases, &connect, engine.as_deref(), &background_session, request).await
                 } => result,
             };
@@ -4739,6 +4824,34 @@ impl Worker {
             }
         });
     }
+}
+
+#[cfg(target_os = "linux")]
+fn soloist_playback(
+    state: &PlaybackState,
+    received_at: Instant,
+    devices: &[Device],
+) -> Option<PlaybackState> {
+    let device = state.device.as_ref()?;
+    let mut matching = devices
+        .iter()
+        .filter(|known| known.name == device.name && known.id.is_some());
+    let known = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    let mut state = state.clone();
+    state.device.as_mut()?.id = known.id.clone();
+    if state.is_playing {
+        let position = u64::from(state.progress_ms.unwrap_or(0))
+            .saturating_add(received_at.elapsed().as_millis().min(u64::MAX.into()) as u64);
+        let limit = state
+            .item
+            .as_ref()
+            .map_or(u32::MAX, PlayableItem::duration_ms);
+        state.progress_ms = Some(position.min(u64::from(limit)) as u32);
+    }
+    Some(state)
 }
 
 fn friendly_connect_error(error: &anyhow::Error) -> String {
@@ -5290,9 +5403,12 @@ async fn handle(
             return (response, Vec::new());
         }
     }
-    if let Some(engine) =
-        engine.filter(|engine| same_account(&engine.session().username(), api.account().as_ref()))
-        && let Some(response) = over_connect(engine, connect, &request).await
+    if let Some(response) = over_connect(
+        engine.filter(|engine| same_account(&engine.session().username(), api.account().as_ref())),
+        connect,
+        &request,
+    )
+    .await
     {
         log::debug!("Spotify route operation={operation:?} source=connect");
         return (response, Vec::new());
@@ -5762,10 +5878,48 @@ async fn handle(
 /// the session's Connect state service instead. `None` leaves the request
 /// to the Web API. See [`crate::sonos`].
 async fn over_connect(
-    engine: &Engine,
+    engine: Option<&Engine>,
     connect: &crate::sonos::Controller,
     request: &ApiRequest,
 ) -> Option<ApiResponse> {
+    let device_id = match request {
+        ApiRequest::Remote { device_id, .. }
+        | ApiRequest::ShufflePlay { device_id, .. }
+        | ApiRequest::AddToQueue { device_id, .. }
+        | ApiRequest::AddManyToQueue { device_id, .. } => device_id.as_deref(),
+        ApiRequest::Transfer { device_id, .. } => Some(device_id.as_str()),
+        _ => return None,
+    };
+    connect.restricted_target(device_id)?;
+    let Some(engine) = engine else {
+        let error = ApiError::Network(
+            "Enable local playback for this account to control this Connect device".into(),
+        );
+        return Some(match request {
+            ApiRequest::Remote { action, .. } => ApiResponse::Remote {
+                action: *action,
+                result: Err(error),
+            },
+            ApiRequest::ShufflePlay { .. } => ApiResponse::Remote {
+                action: RemoteAction::Play,
+                result: Err(error),
+            },
+            ApiRequest::Transfer { device_id, .. } => ApiResponse::Transferred {
+                device_id: device_id.clone(),
+                result: Err(error),
+            },
+            ApiRequest::AddToQueue { label, .. } => ApiResponse::QueueAdded {
+                label: label.clone(),
+                result: Err(error),
+            },
+            ApiRequest::AddManyToQueue { request, .. } => ApiResponse::QueueBatchAdded {
+                request: *request,
+                added: 0,
+                result: Err(error),
+            },
+            _ => return None,
+        });
+    };
     let session = engine.session();
     Some(match request {
         ApiRequest::Remote {
@@ -7654,6 +7808,157 @@ mod authorization_tests {
             Some("soloist")
         );
         assert_eq!(worker.connect.restricted_target(Some("phone")), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn soloist_feed_uses_only_an_unambiguous_device_from_the_accounts_connect_cluster() {
+        let state = PlaybackState {
+            device: Some(Device {
+                name: "Custom Soloist".into(),
+                volume_percent: Some(42),
+                ..Default::default()
+            }),
+            progress_ms: Some(199_000),
+            is_playing: true,
+            item: Some(PlayableItem::Track(Track {
+                uri: "spotify:track:current".into(),
+                duration_ms: 300_000,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let device = Device {
+            id: Some("soloist-id".into()),
+            name: "Custom Soloist".into(),
+            ..Default::default()
+        };
+        let at = Instant::now() - Duration::from_secs(1);
+        assert!(soloist_playback(&state, at, &[]).is_none());
+        assert!(soloist_playback(&state, at, &[device.clone(), device.clone()]).is_none());
+        let current = soloist_playback(&state, at, std::slice::from_ref(&device)).unwrap();
+        assert_eq!(current.device.unwrap().id.as_deref(), Some("soloist-id"));
+        assert!((200_000..201_000).contains(&current.progress_ms.unwrap()));
+        let paused = PlaybackState {
+            is_playing: false,
+            ..state
+        };
+        assert_eq!(
+            soloist_playback(&paused, at, &[device])
+                .unwrap()
+                .progress_ms,
+            Some(199_000)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn initial_soloist_snapshot_waits_for_account_verification_without_being_lost() {
+        let (runtime, mut worker, events) = worker("soloist-before-sign-in");
+        let (send, receive) = mpsc::unbounded_channel();
+        send.send(Command::SoloistFeed {
+            state: Some(Box::new(PlaybackState {
+                progress_ms: Some(199_000),
+                ..Default::default()
+            })),
+            received_at: Instant::now(),
+        })
+        .unwrap();
+        send.send(Command::Shutdown).unwrap();
+        runtime.block_on(worker.run(receive));
+        assert_eq!(
+            worker.soloist_state.as_ref().unwrap().0.progress_ms,
+            Some(199_000)
+        );
+        assert!(worker.soloist_playback().is_none());
+        assert!(
+            !events
+                .try_iter()
+                .any(|event| matches!(event, Event::SoloistPlayback { .. }))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn every_soloist_mutation_stays_off_the_web_api_even_without_a_session() {
+        let (runtime, worker, _) = worker("soloist-command-routes");
+        worker.observe_connect_response(&mut ApiResponse::PlaybackState {
+            seq: 1,
+            result: Ok(Some(PlaybackState {
+                device: Some(Device {
+                    id: Some("soloist".into()),
+                    name: "Spotilossless Soloist".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+        });
+        runtime.block_on(async {
+            for device_id in [Some("soloist".to_string()), None] {
+                for action in [
+                    RemoteAction::Play,
+                    RemoteAction::Pause,
+                    RemoteAction::Next,
+                    RemoteAction::Previous,
+                    RemoteAction::Seek,
+                    RemoteAction::Volume,
+                    RemoteAction::Shuffle,
+                    RemoteAction::Repeat,
+                ] {
+                    let request = ApiRequest::Remote {
+                        action,
+                        device_id: device_id.clone(),
+                        play: None,
+                        position_ms: 1000,
+                        percent: 50,
+                        flag: true,
+                        repeat: "off".into(),
+                    };
+                    assert!(matches!(
+                        over_connect(None, &worker.connect, &request).await,
+                        Some(ApiResponse::Remote { result: Err(_), .. })
+                    ));
+                }
+                for request in [
+                    ApiRequest::Transfer {
+                        device_id: "soloist".into(),
+                        play: false,
+                    },
+                    ApiRequest::ShufflePlay {
+                        device_id: device_id.clone(),
+                        play: PlayRequest::context("spotify:playlist:blend"),
+                    },
+                    ApiRequest::AddToQueue {
+                        device_id: device_id.clone(),
+                        uri: "spotify:track:song".into(),
+                        label: "Song".into(),
+                    },
+                    ApiRequest::AddManyToQueue {
+                        device_id,
+                        request: 1,
+                        uris: vec!["spotify:track:song".into()],
+                    },
+                ] {
+                    assert!(
+                        over_connect(None, &worker.connect, &request)
+                            .await
+                            .is_some()
+                    );
+                }
+            }
+            assert!(
+                over_connect(
+                    None,
+                    &worker.connect,
+                    &ApiRequest::Transfer {
+                        device_id: "phone".into(),
+                        play: true
+                    }
+                )
+                .await
+                .is_none()
+            );
+        });
     }
 
     #[test]

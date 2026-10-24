@@ -111,10 +111,16 @@ impl Controller {
     #[cfg(target_os = "linux")]
     pub(crate) fn observe_connect_devices(&self, devices: &[Device]) {
         self.observe_devices(devices);
-        self.known().active_restricted = devices
+        let mut known = self.known();
+        known.active_restricted = devices
             .iter()
             .find(|device| device.is_active)
-            .filter(|device| device.is_restricted)
+            .filter(|device| {
+                device.is_restricted
+                    || device.id.as_ref().is_some_and(|id| {
+                        known.restricted.contains(id) || known.speakers.contains_key(id)
+                    })
+            })
             .and_then(|device| device.id.clone());
     }
 
@@ -419,6 +425,28 @@ mod tests {
             Some("restricted-one")
         );
         controller.observe_playing(3, None);
+        assert_eq!(controller.restricted_target(None), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn connect_discovery_preserves_restrictions_learned_from_the_web_api() {
+        let controller = Controller::default();
+        let mut device = Device {
+            id: Some("restricted".into()),
+            is_restricted: true,
+            is_active: true,
+            ..Default::default()
+        };
+        controller.observe_playing(1, Some(&device));
+        device.is_restricted = false;
+        controller.observe_connect_devices(std::slice::from_ref(&device));
+        assert_eq!(
+            controller.restricted_target(None).as_deref(),
+            Some("restricted")
+        );
+        device.id = Some("ordinary-phone".into());
+        controller.observe_connect_devices(&[device]);
         assert_eq!(controller.restricted_target(None), None);
     }
 

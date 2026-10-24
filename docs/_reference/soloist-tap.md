@@ -8,7 +8,7 @@ when an independently installed Soloist receiver plays through PipeWire. The
 module does not install Soloist or change playback routing. It needs `pw-dump`
 and `pw-record` on `PATH`.
 
-The app starts capture while the configured Soloist device is the chosen
+The app starts capture while the configured or locally observed Soloist device is the chosen
 Connect output and Spotifast knows the receiver's PID, and stops it otherwise
 (`App::follow_soloist_tap`). The player bar and mini player visualisers then
 treat Soloist's playback as sound to show and read it with `soloist_tap::LAG`.

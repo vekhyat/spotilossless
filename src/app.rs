@@ -425,6 +425,8 @@ pub struct App {
     /// Ignore the previous local song until a Connect transfer reports its track.
     local_transfer_sequence: Option<u64>,
     remote_transfer: Option<RemoteTransfer>,
+    #[cfg(target_os = "linux")]
+    pending_remote_repeat: Option<(RepeatMode, Instant)>,
     /// Local playback is authorized and the engine is connected.
     pub local_ready: bool,
     pub local_playback: LocalPlayback,
@@ -1105,6 +1107,8 @@ impl App {
             local_device_id: None,
             local_transfer_sequence: None,
             remote_transfer: None,
+            #[cfg(target_os = "linux")]
+            pending_remote_repeat: None,
             local_ready: false,
             local_playback: LocalPlayback::Unavailable,
             local: LocalState::default(),
@@ -2533,6 +2537,10 @@ impl App {
                 }
                 Event::Local(state) => self.handle_local(*state),
                 Event::Api(response) => self.handle_api(*response),
+                #[cfg(target_os = "linux")]
+                Event::SoloistPlayback { state, received_at } => {
+                    self.handle_soloist_playback(*state, received_at)
+                }
                 Event::Accent {
                     url,
                     color,
@@ -3014,6 +3022,10 @@ impl App {
     fn reset_data(&mut self) {
         self.local_transfer_sequence = None;
         self.remote_transfer = None;
+        #[cfg(target_os = "linux")]
+        {
+            self.pending_remote_repeat = None;
+        }
         self.queue_start_pending = None;
         self.pending_album_queues.clear();
         self.pending_queue_batches.clear();
@@ -6725,6 +6737,24 @@ impl App {
                     return;
                 }
                 self.remote_poll_pending = false;
+                #[cfg(target_os = "linux")]
+                if let Ok(Some(state)) = &result
+                    && state
+                        .device
+                        .as_ref()
+                        .is_some_and(|device| self.backend.soloist().matches_device(&device.name))
+                {
+                    if self.soloist_state_stale(state, Instant::now()) {
+                        self.poll_remote_soon();
+                        return;
+                    }
+                    if self
+                        .shuffle_set_at
+                        .is_none_or(|at| at.elapsed() > Duration::from_secs(5))
+                    {
+                        self.shuffle_wanted = state.shuffle_state;
+                    }
+                }
                 if self.transferring_remote()
                     && let Ok(state) = &result
                 {
@@ -9578,6 +9608,10 @@ impl App {
                 self.backend.player(PlayerCommand::Repeat(mode));
             }
             Target::Remote(device_id) => {
+                #[cfg(target_os = "linux")]
+                {
+                    self.pending_remote_repeat = Some((mode, Instant::now()));
+                }
                 if let Some(remote) = self.remote.as_mut() {
                     remote.state.repeat_state = mode.api_name().to_string();
                 }
@@ -13421,6 +13455,112 @@ fn cover_error(locale: Locale, error: &crate::api::client::ApiError) -> String {
 
 #[cfg(target_os = "linux")]
 impl App {
+    fn soloist_state_stale(&self, state: &PlaybackState, received_at: Instant) -> bool {
+        if self.local_transfer_sequence.is_some() {
+            return true;
+        }
+        let target = match self.target() {
+            Target::Local
+                if self.local.is_active()
+                    || self.intent_track.as_ref().is_some_and(|intent| {
+                        intent.confirmation == TrackConfirmation::Local
+                            && intent.at.elapsed() < PLAYBACK_HOLD
+                    }) =>
+            {
+                return true;
+            }
+            Target::Local => None,
+            Target::Remote(target) => target,
+        };
+        if target.as_ref().is_some_and(|id| {
+            state.device.as_ref().and_then(|device| device.id.as_ref()) != Some(id)
+        }) {
+            return true;
+        }
+        let held = |at: Instant, duration: Duration| received_at < at || at.elapsed() < duration;
+        if let Some(intent) = &self.intent_track
+            && matches!(intent.confirmation, TrackConfirmation::Remote { .. })
+            && held(intent.at, PLAYBACK_HOLD)
+        {
+            let latest_position = intent
+                .position_ms
+                .saturating_add(intent.at.elapsed().as_millis().min(u32::MAX.into()) as u32)
+                .saturating_add(1500);
+            if received_at < intent.at
+                || state.item.as_ref().map(PlayableItem::uri) != Some(intent.uri.as_str())
+                || state.progress_ms.is_none_or(|position| {
+                    position < intent.position_ms.saturating_sub(1500) || position > latest_position
+                })
+            {
+                return true;
+            }
+        }
+        if let Some((wanted, at)) = self.optimistic_playing
+            && held(at, PLAYBACK_HOLD)
+            && (received_at < at || state.is_playing != wanted)
+        {
+            return true;
+        }
+        if let Some((wanted, at)) = self.pending_remote_position
+            && held(at, OPTIMISTIC_HOLD)
+        {
+            let elapsed = if state.is_playing {
+                at.elapsed().as_millis().min(u32::MAX.into()) as u32
+            } else {
+                0
+            };
+            if received_at < at
+                || state
+                    .progress_ms
+                    .is_none_or(|position| position.abs_diff(wanted.saturating_add(elapsed)) > 1500)
+            {
+                return true;
+            }
+        }
+        if let Some((wanted, at)) = self.pending_remote_volume
+            && held(at, OPTIMISTIC_HOLD)
+            && (received_at < at
+                || state
+                    .device
+                    .as_ref()
+                    .and_then(|device| device.volume_percent)
+                    .is_none_or(|volume| volume.abs_diff(wanted) > 1))
+        {
+            return true;
+        }
+        if let Some(at) = self.shuffle_set_at
+            && held(at, Duration::from_secs(5))
+            && (received_at < at || state.shuffle_state != self.shuffle_wanted)
+        {
+            return true;
+        }
+        if let Some((wanted, at)) = self.pending_remote_repeat
+            && held(at, OPTIMISTIC_HOLD)
+            && (received_at < at || state.repeat_state != wanted.api_name())
+        {
+            return true;
+        }
+        false
+    }
+
+    fn handle_soloist_playback(&mut self, state: PlaybackState, received_at: Instant) {
+        if self.soloist_state_stale(&state, received_at) {
+            return;
+        }
+        if self.intent_track.as_ref().is_some_and(|intent| {
+            matches!(intent.confirmation, TrackConfirmation::Remote { .. })
+                && state.item.as_ref().map(PlayableItem::uri) == Some(intent.uri.as_str())
+        }) {
+            self.intent_track = None;
+        }
+        let pending = self.remote_poll_pending;
+        self.handle_api(ApiResponse::PlaybackState {
+            seq: self.remote_poll_seq,
+            result: Ok(Some(state)),
+        });
+        self.remote_poll_pending = pending;
+    }
+
     /// Whether the chosen Connect output is Soloist, including an optimistic
     /// transfer that Spotify has not yet confirmed. This does not report the
     /// stream's codec or bit depth. The PID is `self.backend.soloist().pid()`.
@@ -24145,6 +24285,183 @@ mod tests {
             assert_eq!(queue_uris(&app), before);
             assert!(app.backend.take_player_commands().is_empty());
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_soloist_events_cannot_undo_optimistic_controls_or_settle_track_intent() {
+        let mut app = test_app("soloist-stale-events");
+        app.local_ready = true;
+        app.selected_device = Some("soloist".into());
+        let stale = PlaybackState {
+            device: Some(Device {
+                id: Some("soloist".into()),
+                name: "Spotilossless Soloist".into(),
+                is_active: true,
+                volume_percent: Some(10),
+                ..Default::default()
+            }),
+            item: Some(queued_song("spotify:track:old")),
+            progress_ms: Some(10_000),
+            repeat_state: "off".into(),
+            ..Default::default()
+        };
+        app.handle_soloist_playback(stale.clone(), Instant::now());
+        app.toggle_play();
+        app.seek(40_000);
+        app.set_volume(60, true);
+        app.set_shuffle(true);
+        app.set_repeat(RepeatMode::Track);
+        let before_action = Instant::now() - Duration::from_secs(1);
+        app.remote_poll_pending = true;
+        for _ in 0..5 {
+            app.handle_soloist_playback(stale.clone(), before_action);
+            app.handle_soloist_playback(stale.clone(), Instant::now());
+            let shown = app.now_playing().unwrap();
+            assert!(shown.playing);
+            assert_eq!(shown.position_ms, 40_000);
+            assert_eq!(shown.volume_percent, 60);
+            assert!(shown.shuffle);
+            assert_eq!(shown.repeat, RepeatMode::Track);
+            assert!(app.remote_poll_pending);
+        }
+        let mut confirmed = stale.clone();
+        confirmed.is_playing = true;
+        confirmed.progress_ms = Some(40_000);
+        confirmed.device.as_mut().unwrap().volume_percent = Some(60);
+        confirmed.shuffle_state = true;
+        confirmed.repeat_state = "track".into();
+        app.handle_soloist_playback(confirmed.clone(), Instant::now());
+        assert!(app.remote.as_ref().unwrap().state.is_playing);
+        app.pending_remote_position = None;
+        app.intent_track = Some(TrackIntent {
+            uri: "spotify:track:new".into(),
+            position_ms: 0,
+            at: Instant::now(),
+            confirmation: TrackConfirmation::Remote {
+                after_poll: 0,
+                mismatches: 0,
+            },
+        });
+        app.remote_poll_seq = 1;
+        for _ in 0..5 {
+            app.handle_soloist_playback(confirmed.clone(), Instant::now());
+        }
+        assert_eq!(app.intent_track.as_ref().unwrap().uri, "spotify:track:new");
+        assert_eq!(
+            app.remote
+                .as_ref()
+                .unwrap()
+                .state
+                .item
+                .as_ref()
+                .unwrap()
+                .uri(),
+            "spotify:track:old"
+        );
+        confirmed.item = Some(queued_song("spotify:track:new"));
+        confirmed.progress_ms = Some(0);
+        app.handle_soloist_playback(confirmed, Instant::now());
+        assert!(app.intent_track.is_none());
+        assert_eq!(
+            app.remote
+                .as_ref()
+                .unwrap()
+                .state
+                .item
+                .as_ref()
+                .unwrap()
+                .uri(),
+            "spotify:track:new"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_soloist_position_cannot_confirm_restarting_the_same_song() {
+        let mut app = test_app("soloist-restart-same-song");
+        app.selected_device = Some("soloist".into());
+        let mut state = PlaybackState {
+            device: Some(Device {
+                id: Some("soloist".into()),
+                name: "Spotilossless Soloist".into(),
+                ..Default::default()
+            }),
+            item: Some(queued_song("spotify:track:same")),
+            progress_ms: Some(199_000),
+            ..Default::default()
+        };
+        app.remote = Some(RemoteSnapshot {
+            state: state.clone(),
+            received_at: Instant::now(),
+        });
+        app.intent_track = Some(TrackIntent {
+            uri: "spotify:track:same".into(),
+            position_ms: 0,
+            at: Instant::now(),
+            confirmation: TrackConfirmation::Remote {
+                after_poll: 0,
+                mismatches: 0,
+            },
+        });
+        app.handle_soloist_playback(state.clone(), Instant::now());
+        assert!(app.intent_track.is_some());
+        state.progress_ms = Some(0);
+        app.handle_soloist_playback(state, Instant::now());
+        assert!(app.intent_track.is_none());
+        assert_eq!(app.remote.unwrap().state.progress_ms, Some(0));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn soloist_feed_populates_idle_local_playback_without_a_web_api_snapshot() {
+        let mut app = test_app("soloist-initial-state");
+        app.local_ready = true;
+        assert_eq!(app.target(), Target::Local);
+        let state = PlaybackState {
+            device: Some(Device {
+                id: Some("soloist".into()),
+                name: "Spotilossless Soloist".into(),
+                is_active: true,
+                ..Default::default()
+            }),
+            item: Some(queued_song("spotify:track:current")),
+            shuffle_state: true,
+            ..Default::default()
+        };
+        app.handle_soloist_playback(state.clone(), Instant::now());
+        assert_eq!(app.target(), Target::Remote(Some("soloist".into())));
+        assert_eq!(app.now_playing().unwrap().uri, "spotify:track:current");
+        assert!(app.now_playing().unwrap().shuffle);
+        app.local_transfer_sequence = Some(app.local.track_sequence);
+        let mut stale = state;
+        stale.item = Some(queued_song("spotify:track:stale"));
+        app.handle_soloist_playback(stale.clone(), Instant::now());
+        assert_eq!(
+            app.remote
+                .as_ref()
+                .unwrap()
+                .state
+                .item
+                .as_ref()
+                .unwrap()
+                .uri(),
+            "spotify:track:current"
+        );
+        app.local_transfer_sequence = None;
+        app.selected_device = Some("phone".into());
+        app.handle_soloist_playback(stale, Instant::now());
+        assert_eq!(
+            app.remote
+                .as_ref()
+                .unwrap()
+                .state
+                .item
+                .as_ref()
+                .unwrap()
+                .uri(),
+            "spotify:track:current"
+        );
     }
 
     #[test]

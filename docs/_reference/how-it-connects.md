@@ -473,6 +473,13 @@ computer's Connect device to that one. This needs local playback enabled,
 because the session belongs to it. Playback state is still read from the Web
 API, which reports a restricted device while it plays.
 
+In this personal fork on Linux, Soloist is also treated as Connect-only, even
+without Spotify's restricted flag. While its local WebSocket trace is live,
+now-playing updates and player-state polls use that feed rather than the Web
+API. The receiver's name must match one device in the signed-in playback
+session. See [Soloist setup](/settings-and-files/#linux-soloist-receiver-personal-fork)
+for discovery without configuration and the local process checks.
+
 Shuffle Play enables shuffle before starting the context, as it does for
 Web API devices. If enabling shuffle fails, playback does not start.
 

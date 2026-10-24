@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::paths::AppDirs;
 
+pub(crate) mod feed;
+
 const POLL: Duration = Duration::from_secs(2);
 const STABLE: Duration = Duration::from_secs(60);
 const KEY_LIMIT: u64 = 4096;

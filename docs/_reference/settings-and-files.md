@@ -708,6 +708,23 @@ settles, and the receiver is told to keep the chosen playing or paused state.
 This relies on the source device publishing a valid Connect context and queue;
 Spotifast cannot recover context pages that librespot has already lost.
 
+While Soloist is active, its local WebSocket events update the song, position,
+play/pause, volume, shuffle and repeat immediately, even during a Web API rate
+limit. These events obey the same optimistic control holds as remote polls.
+Player-state polls use this live state instead of spending Web API quota. If
+the local feed closes, ordinary polling resumes. Queue reads still use Spotify.
+
+The backend runs the installed binary's `soloist ctl trace` against the
+configured data directory and reconnects after a disconnection. Without setup,
+it can observe an already running receiver in
+`$XDG_DATA_HOME/spotilossless/soloist/session` (normally
+`~/.local/share/spotilossless/soloist/session`). It verifies the PID, executable,
+data directory and loopback WebSocket address before starting the trace. The
+receiver's reported name identifies it even when it differs from the default,
+but its device ID must also match exactly one device in the signed-in playback
+session's Connect cluster. Observation needs no Soloist API key, never launches
+the receiver itself, and never stops an externally owned receiver.
+
 `soloist.json` in Spotifast's config directory stores only `binary`, `data_dir`
 and `device_name`. Older files without `device_name` use **Spotilossless
 Soloist**. Writes replace the file atomically. The API key is stored under
@@ -726,5 +743,6 @@ to disable supervision; remove the separate Secret Service entry with your
 keyring manager if you also want to forget the key. Pairing and Soloist's own
 cache remain in the supplied data directory.
 
-Soloist audio bypasses Spotifast's librespot equalizer and visualiser input.
-This sidecar only exposes its PID for a separate PipeWire capture integration.
+Soloist audio bypasses Spotifast's librespot equalizer. The app follows its
+PipeWire output for visualisers; see [Soloist visualiser capture](../soloist-tap/)
+for the capture requirements and volume limitations.
