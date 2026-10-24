@@ -328,6 +328,23 @@ impl ProtectedStore for NativeStore {
     }
 }
 
+/// Soloist is independent of Spotify sign-in and never uses a plaintext
+/// fallback. Call these only from the setup command or a background thread.
+#[cfg(target_os = "linux")]
+pub(crate) fn soloist_key() -> Result<Option<Vec<u8>>, Error> {
+    NativeStore::default().read("soloist-api-key")
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn store_soloist_key(secret: &[u8]) -> Result<(), Error> {
+    let mut store = NativeStore::default();
+    store.write("soloist-api-key", secret)?;
+    if store.read("soloist-api-key")?.as_deref() != Some(secret) {
+        return Err(Error::Verification);
+    }
+    Ok(())
+}
+
 /// Credential Manager first, and a copy sealed for this Windows user in the
 /// state directory. On some machines Credential Manager refuses the write
 /// (#748) or drops the entries during a restart (#815); the sealed copy then

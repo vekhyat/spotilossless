@@ -671,3 +671,51 @@ For a manual installation, remove only
 Packaged launches recreate missing integration files. To disable the hook
 while keeping the package installed, leave that hook file empty instead;
 existing user files are preserved. Selecting Dark or Light is sufficient to stop following Omarchy's colors.
+
+## Linux Soloist receiver (personal fork)
+
+This fork can start Spotify's separately installed Soloist receiver and control
+it through Spotify Connect. Soloist decodes the audio and plays to PipeWire.
+Spotifast does not bundle or download Soloist, fetch lossless streams, or change
+librespot's decoder. Supply your own developer key, current Linux binary and
+already paired data directory. Spotify builds expire after about 90 days.
+
+With Secret Service unlocked, run this in Bash. Shell tracing must be off so
+the key is not printed; `read -s` also keeps it off screen and out of history:
+
+```bash
+set +x
+read -rs -p 'Soloist developer key: ' soloist_key; printf '\n'
+printf '%s\n' "$soloist_key" | spotifast soloist setup \
+  --binary "$HOME/.local/share/spotilossless/soloist/8b1ea66c2ee806f21/soloist" \
+  --data-dir "$HOME/.local/share/spotilossless/soloist/session" \
+  --name 'Spotilossless Soloist'
+unset soloist_key
+```
+
+Restart Spotifast. Choose **Spotilossless Soloist · Lossless** in the device
+menu. The label identifies the configured receiver; it does not verify the
+current stream's quality. Use a unique device name. Playback controls use the
+existing Spotify Connect connection, including its normal state polling and
+account requirements. No playback transfer happens automatically.
+
+`soloist.json` in Spotifast's config directory stores only `binary`, `data_dir`
+and `device_name`. Older files without `device_name` use **Spotilossless
+Soloist**. Writes replace the file atomically. The API key is stored under
+`rocks.spotifast.Spotifast`, entry `soloist-api-key`, in Secret Service. It is
+independent of Spotify sign-out and is never saved in JSON or logged. Soloist
+requires the key in its process arguments, so local process inspection can
+still expose it while it runs.
+
+Spotifast reuses a matching live receiver for that data directory and leaves
+it running on quit. A receiver started by Spotifast stops when Spotifast quits.
+Unexpected exits retry with increasing delays up to 60 seconds; replace an
+expired binary and rerun setup if its path changed. Locked or missing keys
+show an error: unlock Secret Service, rerun setup, and restart Spotifast.
+Demo mode never starts Soloist. Remove `soloist.json` while Spotifast is closed
+to disable supervision; remove the separate Secret Service entry with your
+keyring manager if you also want to forget the key. Pairing and Soloist's own
+cache remain in the supplied data directory.
+
+Soloist audio bypasses Spotifast's librespot equalizer and visualiser input.
+This sidecar only exposes its PID for a separate PipeWire capture integration.

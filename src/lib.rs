@@ -52,6 +52,8 @@ pub mod single_instance;
 pub mod sink;
 pub mod skin;
 #[cfg(target_os = "linux")]
+pub mod soloist;
+#[cfg(target_os = "linux")]
 pub mod soloist_tap;
 pub mod sonos;
 pub mod system_fonts;

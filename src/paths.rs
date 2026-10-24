@@ -108,6 +108,11 @@ impl AppDirs {
         self.config.join("settings.json")
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn soloist_file(&self) -> PathBuf {
+        self.config.join("soloist.json")
+    }
+
     /// Winamp skins the listener has added, as `.wsz` files or folders.
     pub fn skins_dir(&self) -> PathBuf {
         self.config.join("skins")

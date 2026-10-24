@@ -212,7 +212,11 @@ The Web API and librespot do not provide these features:
   [capture its PipeWire output for visualisers](/soloist-tap/), with volume
   limitations, but the output still bypasses Spotifast's equalizer.
   Spotifast will reconsider it if Spotify offers a supported desktop path.
-  See [issue #965](https://github.com/crmne/spotifast/issues/965).
+  This personal fork has an opt-in Linux supervisor for a separately installed,
+  already paired receiver with the listener's own key. It controls Soloist as
+  a Connect device and does not change librespot's playback capabilities. See
+  [Linux Soloist setup](/settings-and-files/#linux-soloist-receiver-personal-fork)
+  and [issue #965](https://github.com/crmne/spotifast/issues/965).
 - **Local files from Spotify's Local Files playlist.** librespot cannot play
   that playlist; add the songs to another playlist first. Local files on other
   computers or phones are not shared either: Spotify keeps only their names.
