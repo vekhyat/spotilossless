@@ -13183,6 +13183,44 @@ fn slow_banner_due(last: Option<&str>, now: jiff::Timestamp) -> bool {
     elapsed < jiff::SignedDuration::ZERO || elapsed >= SLOW_BANNER_INTERVAL
 }
 
+/// The player bar's line about lossless playback. Only what devices report
+/// counts: the playing device's reported level, a device that can play
+/// lossless but reports less, or another device that can play lossless, the
+/// one the device menu would list first (`rank` is the menu's history rank).
+pub fn lossless_line(
+    active: Option<&str>,
+    reported: Option<&crate::quality::Reported>,
+    locale: Locale,
+    supports_lossless: impl Fn(&str) -> bool,
+    devices: &[Device],
+    rank: impl Fn(&Device) -> (std::cmp::Reverse<usize>, usize),
+) -> Option<LosslessLine> {
+    if let Some(id) = active {
+        let reported = reported.filter(|reported| reported.device_id == id);
+        if let Some(reported) = reported {
+            if let Some(level) = reported.level.label(locale) {
+                return Some(LosslessLine::Playing(level));
+            }
+            if supports_lossless(id) {
+                return Some(LosslessLine::TurnedOff);
+            }
+        }
+    }
+    devices
+        .iter()
+        .filter(|device| {
+            device
+                .id
+                .as_deref()
+                .is_some_and(|id| Some(id) != active && supports_lossless(id))
+        })
+        .min_by_key(|device| (rank(device), device.name.to_lowercase(), device.id.clone()))
+        .map(|device| LosslessLine::Offer {
+            device_id: device.id.clone().unwrap_or_default(),
+            name: device.name.clone(),
+        })
+}
+
 pub fn engine_config(
     dirs: &AppDirs,
     settings: &Settings,
@@ -13645,30 +13683,22 @@ impl App {
     }
 
     /// What the player bar says about lossless under the artist, if anything.
-    /// Only what devices report counts: a device playing lossless, a device
-    /// that can play lossless but reports less, or one to switch to.
+    /// See [`lossless_line`].
     pub fn lossless_line(&self) -> Option<LosslessLine> {
-        use crate::quality::{current, supports_lossless};
+        use crate::quality::{current, for_device, supports_lossless};
         let active = self.remote_device_id();
-        if let Some(id) = &active {
-            if let Some(level) = self
-                .reported_quality()
-                .and_then(|reported| reported.level.label(self.locale))
-            {
-                return Some(LosslessLine::Playing(level));
-            }
-            if supports_lossless(current(), id) {
-                return self.reported_quality().map(|_| LosslessLine::TurnedOff);
-            }
-        }
-        self.devices
-            .iter()
-            .filter(|device| device.id.is_some() && device.id != active)
-            .find(|device| supports_lossless(current(), device.id.as_deref().unwrap_or_default()))
-            .map(|device| LosslessLine::Offer {
-                device_id: device.id.clone().unwrap_or_default(),
-                name: device.name.clone(),
-            })
+        let reported = active.as_deref().and_then(|id| for_device(current(), id));
+        lossless_line(
+            active.as_deref(),
+            reported.as_ref(),
+            self.locale,
+            |id| supports_lossless(current(), id),
+            &self.devices,
+            |device| {
+                self.device_history
+                    .rank(self.user_id(), device.id.as_deref())
+            },
+        )
     }
 
     /// Whether the visualisers have sound to show: the song playing on this
@@ -20287,41 +20317,164 @@ mod tests {
         }
     }
 
-    /// Playing on this computer, the player bar offers a device that says
-    /// it can play lossless, and choosing it transfers there.
-    #[test]
-    fn the_player_bar_offers_a_device_that_reports_lossless_support() {
-        use librespot_protocol::connect::{Capabilities, CapabilitySupportDetails, DeviceInfo};
-
-        let mut app = test_app("lossless-offer");
-        app.devices = vec![Device {
-            id: Some("lossless-offer-receiver".into()),
-            name: "Spotilossless Soloist".into(),
-            ..Default::default()
-        }];
-        assert_eq!(app.lossless_line(), None);
-
-        let mut cluster = librespot_protocol::connect::Cluster::default();
-        cluster.device.insert(
-            "lossless-offer-receiver".into(),
-            DeviceInfo {
-                capabilities: protobuf::MessageField::some(Capabilities {
-                    supports_hifi: protobuf::MessageField::some(CapabilitySupportDetails {
-                        fully_supported: true,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
+    fn lossless_devices(ids: &[&str]) -> Vec<Device> {
+        ids.iter()
+            .map(|id| Device {
+                id: Some((*id).into()),
+                name: format!("Device {id}"),
                 ..Default::default()
-            },
-        );
-        crate::quality::note(crate::quality::current(), &cluster);
-        assert_eq!(
-            app.lossless_line(),
-            Some(LosslessLine::Offer {
-                device_id: "lossless-offer-receiver".into(),
-                name: "Spotilossless Soloist".into(),
             })
+            .collect()
+    }
+
+    /// Of the devices that can play lossless, the offer is the one the
+    /// device menu lists first, whatever order Spotify listed them in.
+    /// A device that can't play lossless is never offered.
+    #[test]
+    fn the_lossless_offer_is_the_device_the_menu_lists_first() {
+        let devices = lossless_devices(&["phone", "receiver-b", "receiver-a"]);
+        let supports = |id: &str| id.starts_with("receiver");
+        let mut history = crate::device_history::DeviceHistory::default();
+        let offer = |history: &crate::device_history::DeviceHistory| {
+            lossless_line(
+                None,
+                None,
+                Locale::default(),
+                supports,
+                &devices,
+                |device| history.rank(Some("alice"), device.id.as_deref()),
+            )
+        };
+        // No history: by name.
+        assert_eq!(
+            offer(&history),
+            Some(LosslessLine::Offer {
+                device_id: "receiver-a".into(),
+                name: "Device receiver-a".into(),
+            })
+        );
+        // The one chosen before comes first, as in the menu.
+        history.record("alice", "receiver-b");
+        history.record("alice", "phone");
+        history.record("alice", "phone");
+        assert_eq!(
+            offer(&history),
+            Some(LosslessLine::Offer {
+                device_id: "receiver-b".into(),
+                name: "Device receiver-b".into(),
+            })
+        );
+        // The playing device is never offered.
+        assert_eq!(
+            lossless_line(
+                Some("receiver-b"),
+                None,
+                Locale::default(),
+                supports,
+                &devices,
+                |device| history.rank(Some("alice"), device.id.as_deref()),
+            ),
+            Some(LosslessLine::Offer {
+                device_id: "receiver-a".into(),
+                name: "Device receiver-a".into(),
+            })
+        );
+    }
+
+    /// The playing device's own report decides: a lossless level is shown,
+    /// a lower level on a device that can play lossless says it is off, and
+    /// without a report nothing is claimed for it.
+    #[test]
+    fn the_playing_devices_report_decides_the_lossless_line() {
+        use crate::quality::{Level, Reported};
+        let devices = lossless_devices(&["receiver"]);
+        let supports = |id: &str| id == "receiver";
+        let line = |reported: Option<Reported>| {
+            lossless_line(
+                Some("receiver"),
+                reported.as_ref(),
+                Locale::default(),
+                supports,
+                &devices,
+                |_| (std::cmp::Reverse(0), 0),
+            )
+        };
+        let report = |level| Reported {
+            device_id: "receiver".into(),
+            level,
+            target: None,
+        };
+        assert_eq!(
+            line(Some(report(Level::Lossless24))),
+            Some(LosslessLine::Playing("Lossless 24-bit".into()))
+        );
+        assert_eq!(
+            line(Some(report(Level::VeryHigh))),
+            Some(LosslessLine::TurnedOff)
+        );
+        assert_eq!(line(None), None);
+        // Another device's report is not this one's.
+        assert_eq!(
+            line(Some(Reported {
+                device_id: "phone".into(),
+                ..report(Level::Lossless)
+            })),
+            None
+        );
+    }
+
+    /// Playing a song on this computer, the offer names the receiver, and
+    /// choosing it asks to transfer playback to exactly that device.
+    #[test]
+    fn choosing_the_lossless_offer_transfers_to_that_device() {
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        app.frame_now = Some(NowPlaying {
+            local: true,
+            device_name: None,
+            device_kind: None,
+            uri: "spotify:track:1".into(),
+            id: None,
+            title: String::new(),
+            artists: Vec::new(),
+            subtitle: String::new(),
+            album_name: String::new(),
+            album_id: None,
+            show_id: None,
+            art_url: None,
+            art_small: None,
+            duration_ms: 200_000,
+            position_ms: 1_000,
+            playing: true,
+            loading: false,
+            shuffle: false,
+            repeat: RepeatMode::Off,
+            volume_percent: 50,
+            can_control: true,
+            can_set_volume: true,
+            is_episode: false,
+            resuming: false,
+        });
+        assert!(matches!(app.target(), Target::Local));
+        app.devices = lossless_devices(&["phone", "receiver"]);
+        let Some(LosslessLine::Offer { device_id, .. }) = lossless_line(
+            None,
+            None,
+            app.locale,
+            |id| id == "receiver",
+            &app.devices,
+            |device| app.device_history.rank(app.user_id(), device.id.as_deref()),
+        ) else {
+            panic!("the receiver is offered");
+        };
+        app.apply(Action::Transfer(device_id), &ctx);
+        let transfers = app.backend.take_transfer_requests();
+        assert!(
+            matches!(
+                transfers.as_slice(),
+                [ApiRequest::Transfer { device_id, play: true }] if device_id == "receiver"
+            ),
+            "{transfers:?}"
         );
     }
 
