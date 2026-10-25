@@ -78,11 +78,30 @@ While Soloist plays, the visualisers follow its PipeWire output; see
 
 ## Install this fork on Linux
 
-This fork's Soloist integration is tested on Linux. It needs Spotify Premium,
-PipeWire, and an unlocked Secret Service keyring. Each listener needs their own
-[Soloist key](https://developer.spotify.com/dashboard) and pairs the receiver
-once in Spotify's app on the same local network. Never share your key or
-Spotify credentials.
+This fork, Spotifast Lossless, is unofficial and not supported by the
+Spotifast project. Its Soloist integration is tested on Linux. It needs Spotify
+Premium, PipeWire, and an unlocked Secret Service keyring. Each listener needs
+their own [Soloist key](https://developer.spotify.com/dashboard) and pairs the
+receiver once in Spotify's app on the same local network. Never share your key
+or Spotify credentials.
+
+### Flatpak
+
+Install it from this fork's Flatpak repository, which also brings Freedesktop's
+runtime from Flathub:
+
+```sh
+flatpak install --user https://vekhyat.github.io/spotilossless/spotifast-lossless.flatpakref
+```
+
+Open **Spotifast Lossless**, complete the sign-in described under
+[Start listening](#start-listening), and choose **Settings > Playback > Audio
+quality > Lossless**. `flatpak update` and software centres bring later
+releases. Soloist runs inside the Flatpak, against its runtime's libraries, so
+it also works where the system lacks `libatomic` or a recent glibc. Each
+release also attaches a `.flatpak` file, which does not update by itself.
+
+### From source
 
 1. Install [Rust](https://rustup.rs/) with toolchain 1.98 or newer. Install the
    build dependencies for your distribution:

@@ -26,7 +26,7 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
     // next one.
     appimage: true,
     ..UpdateConfig::new(
-        "crmne/spotifast",
+        "vekhyat/spotilossless",
         "Spotifast",
         "spotifast",
         env!("CARGO_PKG_VERSION"),

@@ -694,6 +694,11 @@ hears that at once rather than after installing libatomic. `tar` unpacks the
 archive. The key needs a running Secret Service keyring, such as GNOME Keyring
 or KWallet.
 
+The fork's Flatpak, `io.github.vekhyat.SpotifastLossless`, runs Soloist inside
+its sandbox, against the Freedesktop runtime's glibc and `libatomic`, so none of
+the above needs installing. Its state, Soloist's builds and session included,
+lives under `~/.var/app/io.github.vekhyat.SpotifastLossless/.local/state/`.
+
 ### Turning it on
 
 Open **Settings > Playback > Audio quality** and choose **Lossless**. The first
