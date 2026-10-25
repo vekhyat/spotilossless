@@ -21297,6 +21297,61 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn a_lossless_retry_that_is_due_or_done_does_not_keep_repainting() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let ctx = egui::Context::default();
+        let at_once = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&at_once);
+        ctx.set_request_repaint_callback(move |info| {
+            if info.delay.is_zero() {
+                flag.store(true, Ordering::SeqCst);
+            }
+        });
+        // Each frame starts with no repaint asked for yet.
+        let frame = |app: &mut App| {
+            ctx.run_ui(egui::RawInput::default(), |_| {})
+                .textures_delta
+                .clear();
+            at_once.store(false, Ordering::SeqCst);
+            app.follow_lossless(&ctx);
+            at_once.load(Ordering::SeqCst)
+        };
+        let mut app = test_app("lossless-quiet-timers");
+        soloist_ready(&mut app);
+        app.settings.lossless = true;
+        let status = app.lossless.status.as_mut().unwrap();
+        status.config = Some(crate::soloist::Config {
+            binary: "/opt/soloist/soloist".into(),
+            data_dir: "/opt/soloist/session".into(),
+            device_name: "Desk Lossless".into(),
+        });
+        status.build.as_mut().unwrap().expires = jiff::Zoned::now()
+            .date()
+            .checked_add(jiff::Span::new().days(5))
+            .unwrap();
+        frame(&mut app);
+        app.on_soloist_installed(Err("Couldn't download Soloist from Spotify.".into()));
+        assert!(!frame(&mut app), "the retry is a quarter of an hour away");
+        // The retry succeeds: its timer is spent.
+        app.lossless.auto_update_at = Some(Instant::now());
+        frame(&mut app);
+        assert!(app.lossless.installing);
+        assert_eq!(app.lossless.auto_update_at, None);
+        let build = app.lossless.status.as_ref().unwrap().build.clone().unwrap();
+        app.on_soloist_installed(Ok(build));
+        let unchanged = app.lossless.status.clone().unwrap();
+        app.on_soloist_status(unchanged);
+        assert!(!frame(&mut app));
+        // A status read that is due waits for Lossless to be chosen again.
+        app.settings.lossless = false;
+        app.lossless.retry_at = Some(Instant::now());
+        assert!(!frame(&mut app));
+        assert!(!frame(&mut app));
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn spotifast_fetches_the_current_build_once_before_spotify_stops_this_one() {
         let ctx = egui::Context::default();
         let mut app = test_app("lossless-auto-update");

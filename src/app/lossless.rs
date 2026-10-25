@@ -74,6 +74,15 @@ pub struct LosslessSetup {
     pub(super) resume_at: Option<Instant>,
 }
 
+/// Wakes the app for a timer still to come. A due timer that has not been
+/// taken waits for an event, which repaints by itself.
+fn repaint_at(ctx: &egui::Context, at: Option<Instant>) {
+    let wait = at.map(|at| at.saturating_duration_since(Instant::now()));
+    if let Some(wait) = wait.filter(|wait| !wait.is_zero()) {
+        ctx.request_repaint_after(wait);
+    }
+}
+
 /// A song and the point in it, as Soloist last played it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Place {
@@ -205,8 +214,10 @@ impl App {
         {
             self.lossless.retry_at = None;
             self.request_soloist_status();
-        } else if let Some(at) = self.lossless.retry_at {
-            ctx.request_repaint_after(at.saturating_duration_since(Instant::now()));
+        } else {
+            // One that is due waits for Lossless, or for the read on its
+            // way, each of which repaints by itself.
+            repaint_at(ctx, self.lossless.retry_at);
         }
         // Soloist says on its local feed the moment it signs in; ask Spotify
         // for the account's devices then rather than at the next poll.
@@ -238,9 +249,7 @@ impl App {
             .lossless
             .auto_update_at
             .is_none_or(|at| at <= Instant::now());
-        if let Some(at) = self.lossless.auto_update_at {
-            ctx.request_repaint_after(at.saturating_duration_since(Instant::now()));
-        }
+        repaint_at(ctx, self.lossless.auto_update_at);
         if self.settings.lossless
             && (stopped || expiring.is_some())
             && !self.lossless.auto_updated
@@ -253,6 +262,7 @@ impl App {
                 .is_some_and(|status| status.config.is_some())
         {
             self.lossless.auto_updated = true;
+            self.lossless.auto_update_at = None;
             self.lossless.updating_itself = true;
             self.install_soloist();
         } else if let Some(days) = expiring
