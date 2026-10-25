@@ -1163,6 +1163,9 @@ struct SoloistControl {
     /// False in tests and before a restored sign-in: nothing is launched.
     allowed: bool,
     current: Arc<std::sync::Mutex<Option<crate::soloist::Supervisor>>>,
+    /// The latest request. Each runs on its own thread and threads take the
+    /// lock in any order, so one a later request has superseded does nothing.
+    latest: Arc<std::sync::atomic::AtomicU64>,
     report: Arc<dyn Fn(String) + Send + Sync>,
     changed: Arc<dyn Fn() + Send + Sync>,
 }
@@ -1171,7 +1174,7 @@ struct SoloistControl {
 impl SoloistControl {
     /// Replaces the running supervisor on its own thread: stopping one waits
     /// for its receiver to exit, which must not hold up a frame.
-    fn restart(&self, enabled: bool) {
+    fn restart(&self, enabled: bool) -> Option<std::thread::JoinHandle<()>> {
         let enabled = enabled && self.allowed;
         let (dirs, handle, current) = (
             self.dirs.clone(),
@@ -1179,10 +1182,15 @@ impl SoloistControl {
             Arc::clone(&self.current),
         );
         let (report, changed) = (Arc::clone(&self.report), Arc::clone(&self.changed));
-        let _ = std::thread::Builder::new()
+        let latest = Arc::clone(&self.latest);
+        let serial = latest.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        std::thread::Builder::new()
             .name("soloist-restart".into())
             .spawn(move || {
                 let mut current = current.lock().unwrap_or_else(|p| p.into_inner());
+                if latest.load(std::sync::atomic::Ordering::SeqCst) != serial {
+                    return;
+                }
                 if let Some(mut old) = current.take() {
                     old.shutdown();
                 }
@@ -1195,10 +1203,14 @@ impl SoloistControl {
                         move || changed(),
                     ));
                 }
-            });
+            })
+            .ok()
     }
 
     fn shutdown(&self) {
+        // A request still waiting for the lock must not start one again.
+        self.latest
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut current = self.current.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(mut old) = current.take() {
             old.shutdown();
@@ -1290,6 +1302,7 @@ impl Backend {
                 handle: crate::soloist::Handle::default(),
                 allowed: restore_sign_in && !cfg!(test),
                 current: Arc::new(std::sync::Mutex::new(None)),
+                latest: Arc::default(),
                 report: Arc::new(move |message| {
                     let _ = events.send(Event::Error(message));
                     error_waker.wake();
@@ -1719,7 +1732,7 @@ impl Backend {
     /// Call again after setup changes `soloist.json` or the key.
     #[cfg(target_os = "linux")]
     pub fn supervise_soloist(&self, enabled: bool) {
-        self.soloist.restart(enabled);
+        let _ = self.soloist.restart(enabled);
     }
 
     pub fn shutdown(&mut self) {
@@ -9738,6 +9751,33 @@ mod cover_routing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_the_latest_lossless_choice_reaches_soloist() {
+        let control = SoloistControl {
+            dirs: AppDirs {
+                config: "/nonexistent/config".into(),
+                state: "/nonexistent/state".into(),
+                cache: "/nonexistent/cache".into(),
+            },
+            handle: crate::soloist::Handle::default(),
+            allowed: true,
+            current: Arc::new(std::sync::Mutex::new(None)),
+            latest: Arc::default(),
+            report: Arc::new(|_| {}),
+            changed: Arc::new(|| {}),
+        };
+        // Lossless is turned on and off again while a receiver is still
+        // stopping: whichever thread takes the lock first, it stays off.
+        let busy = control.current.lock().unwrap();
+        let on = control.restart(true).unwrap();
+        let off = control.restart(false).unwrap();
+        drop(busy);
+        on.join().unwrap();
+        off.join().unwrap();
+        assert!(control.current.lock().unwrap().is_none());
+    }
 
     #[tokio::test]
     async fn connect_transfer_restores_playback_only_after_a_successful_native_handoff() {
