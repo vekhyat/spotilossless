@@ -1203,15 +1203,22 @@ mod tests {
     impl Scratch {
         fn new() -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
-            let root = AppDirs::installed()
-                .cache
-                .join("soloist-tests")
-                .join(format!(
-                    "{}-{}",
-                    std::process::id(),
-                    NEXT.fetch_add(1, Ordering::Relaxed)
-                ));
-            std::fs::create_dir_all(&root).unwrap();
+            let name = format!(
+                "{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            );
+            // The cache folder, where the scripts these tests run may execute
+            // even when /tmp is mounted noexec. A build sandbox such as Nix's
+            // has no home to hold it, but gives a temporary folder that can.
+            let cached = AppDirs::installed().cache.join("soloist-tests").join(&name);
+            let root = if std::fs::create_dir_all(&cached).is_ok() {
+                cached
+            } else {
+                let temporary = std::env::temp_dir().join("soloist-tests").join(&name);
+                std::fs::create_dir_all(&temporary).unwrap();
+                temporary
+            };
             Self(root)
         }
 
