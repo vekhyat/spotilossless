@@ -412,6 +412,18 @@ fn lossless_steps(app: &mut App, ui: &mut egui::Ui) {
 
     heading(ui, &gettext(locale, "3. Connect it to your account"));
     let paired = app.soloist_paired();
+    let port = app.backend.soloist().pairing_port();
+    let receiver_name = status
+        .config
+        .as_ref()
+        .map(|config| config.device_name.clone())
+        .unwrap_or_else(|| crate::soloist::device_name_for(&app.settings.device_name));
+    // Whether the listener has looked at what to do when the phone does not
+    // list the receiver, so that a port they opened is closed afterwards.
+    let help_id = egui::Id::new("soloist-pairing-help");
+    let help_seen = ui
+        .data(|data| data.get_temp::<bool>(help_id))
+        .unwrap_or(false);
     let (line, color) = if paired && app.settings.lossless {
         (
             gettext(
@@ -429,7 +441,7 @@ fn lossless_steps(app: &mut App, ui: &mut egui::Ui) {
         (
             gettext(
                 locale,
-                "Pairing hasn't finished. Check that Spotify uses the same account and local network, select the receiver in Spotify's device picker, then press Check again.",
+                "Pairing hasn't finished. If your phone doesn't list the receiver, see below, then press Check again.",
             ),
             palette.danger,
         )
@@ -437,25 +449,36 @@ fn lossless_steps(app: &mut App, ui: &mut egui::Ui) {
         (
             gettext(
                 locale,
-                "Start the receiver, then pair it once in Spotify's app. It remembers your account for later starts.",
+                "Start the receiver, then pair it once from Spotify on your phone. Nothing else needs installing, and it remembers your account for later starts.",
             ),
             palette.secondary,
         )
     };
     paragraph(ui, &line, color);
-    if !(paired && app.settings.lossless) {
-        let receiver_name = status
-            .config
-            .as_ref()
-            .map(|config| config.device_name.clone())
-            .unwrap_or_else(|| crate::soloist::device_name_for(&app.settings.device_name));
+    if paired && app.settings.lossless {
+        if help_seen && let Some(port) = port {
+            ui.add_space(6.0);
+            paragraph(
+                ui,
+                &gettext(
+                    locale,
+                    "If you opened port {port} for pairing, close it again:",
+                )
+                .replace("{port}", &port.to_string()),
+                palette.secondary,
+            );
+            command_line(ui, app, &format!("sudo ufw delete allow {port}/tcp"));
+        }
+    } else {
+        ui.add_space(6.0);
         paragraph(
             ui,
             &gettext(
                 locale,
-                "In Spotify's app, use the same account and local network as Spotifast. Open the device picker and select {name}.",
-            ).replace("{name}", &receiver_name),
-            palette.secondary,
+                "On your phone, open Spotify on the same Wi-Fi as this computer, with the account you use here. Tap the devices icon and choose {name}.",
+            )
+            .replace("{name}", &receiver_name),
+            palette.text,
         );
         ui.add_space(6.0);
         let label = if app.lossless.pairing_failed {
@@ -468,8 +491,25 @@ fn lossless_steps(app: &mut App, ui: &mut egui::Ui) {
                 app.actions.push(Action::ChooseLossless);
             }
         });
+        ui.add_space(10.0);
+        // Open by itself once a wait for pairing has run out.
+        let open = help_seen || app.lossless.pairing_failed;
+        let toggle =
+            gettext(locale, "Phone doesn't show {name}?").replace("{name}", &receiver_name);
+        let icon = if open {
+            theme::Icon::ChevronDown
+        } else {
+            theme::Icon::ChevronRight
+        };
+        if theme::soft_button(ui, &palette, Some(icon), &toggle, open).clicked() {
+            ui.data_mut(|data| data.insert_temp(help_id, !open));
+        } else if open && !help_seen {
+            ui.data_mut(|data| data.insert_temp(help_id, true));
+        }
+        if open {
+            pairing_help(ui, app, port, &paragraph);
+        }
     }
-
     ui.add_space(14.0);
     paragraph(
         ui,
@@ -479,6 +519,109 @@ fn lossless_steps(app: &mut App, ui: &mut egui::Ui) {
         ),
         palette.dim,
     );
+}
+
+/// Why a phone can miss the receiver, and what to do about each, with the
+/// commands for this receiver's pairing port.
+#[cfg(target_os = "linux")]
+fn pairing_help(
+    ui: &mut egui::Ui,
+    app: &App,
+    port: Option<u16>,
+    paragraph: &impl Fn(&mut egui::Ui, &str, egui::Color32),
+) {
+    let palette = app.palette;
+    let locale = app.locale;
+    let topic = |ui: &mut egui::Ui, text: &str| {
+        ui.add_space(10.0);
+        theme::text(ui, text, theme::semibold(13.5), palette.text);
+        ui.add_space(2.0);
+    };
+    topic(ui, &gettext(locale, "A firewall on this computer"));
+    match port {
+        Some(port) => {
+            paragraph(
+                ui,
+                &gettext(
+                    locale,
+                    "It can stop your phone reaching the receiver. Open the receiver's port, {port}, for this one step. With ufw:",
+                )
+                .replace("{port}", &port.to_string()),
+                palette.secondary,
+            );
+            command_line(ui, app, &format!("sudo ufw allow {port}/tcp"));
+            paragraph(
+                ui,
+                &gettext(locale, "Close it again once the receiver is connected:"),
+                palette.secondary,
+            );
+            command_line(ui, app, &format!("sudo ufw delete allow {port}/tcp"));
+            paragraph(
+                ui,
+                &gettext(locale, "With firewalld, this opens it for 10 minutes only:"),
+                palette.secondary,
+            );
+            command_line(
+                ui,
+                app,
+                &format!("sudo firewall-cmd --add-port={port}/tcp --timeout=10m"),
+            );
+        }
+        None => paragraph(
+            ui,
+            &gettext(
+                locale,
+                "It can stop your phone reaching the receiver. Start the receiver to see the port to open.",
+            ),
+            palette.secondary,
+        ),
+    }
+    topic(ui, &gettext(locale, "Shared Wi-Fi"));
+    paragraph(
+        ui,
+        &gettext(
+            locale,
+            "At a school, office or hotel, others on the Wi-Fi can also see the receiver while its port is open, and some networks keep devices apart. Your phone's hotspot avoids both: connect this computer to it for this step.",
+        ),
+        palette.secondary,
+    );
+    topic(ui, &gettext(locale, "iPhone"));
+    paragraph(
+        ui,
+        &gettext(
+            locale,
+            "Allow Spotify under Settings > Privacy & Security > Local Network.",
+        ),
+        palette.secondary,
+    );
+}
+
+/// A command to run in a terminal, with a button that copies it.
+#[cfg(target_os = "linux")]
+fn command_line(ui: &mut egui::Ui, app: &App, command: &str) {
+    let palette = app.palette;
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        egui::Frame::NONE
+            .fill(palette.surface)
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(8, 5))
+            .show(ui, |ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(command)
+                            .font(egui::FontId::monospace(12.5))
+                            .color(palette.text),
+                    )
+                    .selectable(true),
+                );
+            });
+        let copy = gettext(app.locale, "Copy");
+        if theme::soft_button(ui, &palette, Some(theme::Icon::Copy), &copy, false).clicked() {
+            ui.ctx().copy_text(command.to_owned());
+        }
+    });
+    ui.add_space(6.0);
 }
 
 // Keep button rows content-sized when the shared modal area last held a taller dialog.

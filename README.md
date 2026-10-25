@@ -36,8 +36,8 @@ The interface includes complete
 This personal fork can play lossless on Linux through Soloist, Spotify's own
 player. Choose **Lossless** under **Settings > Playback > Audio quality**: a
 short guide downloads Soloist from Spotify and stores your own Soloist key in
-the keyring. Pair it once by selecting it in Spotify's app on the same local
-network, using the same account as Spotifast. This computer stays one device,
+the keyring. Pair it once from Spotify on your phone, on the same Wi-Fi and
+with the same account as Spotifast; nothing else needs installing. This computer stays one device,
 and the player bar shows the quality Spotify reports. Soloist's sound skips
 Spotifast's equalizer, and Spotify stops each build after 90 days. Spotifast fetches the
 current build before then by itself. The current x86-64 build needs glibc 2.38
@@ -82,7 +82,8 @@ This fork, Spotifast Lossless, is unofficial and not supported by the
 Spotifast project. Its Soloist integration is tested on Linux. It needs Spotify
 Premium, PipeWire, and an unlocked Secret Service keyring. Each listener needs
 their own [Soloist key](https://developer.spotify.com/dashboard) and pairs the
-receiver once in Spotify's app on the same local network. Never share your key
+receiver once from Spotify on their phone, on the same Wi-Fi. If the phone
+doesn't list it, the guide shows how to let it through a firewall. Never share your key
 or Spotify credentials.
 
 ### Flatpak
@@ -135,8 +136,8 @@ release also attaches a `.flatpak` file, which does not update by itself.
 
 4. Choose **Settings > Playback > Audio quality > Lossless**. Follow the guide
    to download Soloist from Spotify, save your own key, and start the receiver.
-   Select the receiver name shown in the guide in Spotify's desktop or phone
-   app. Spotifast then shows one **(this computer)** device and the quality
+   On your phone, choose the receiver name shown in the guide from Spotify's
+   devices icon. Spotifast then shows one **(this computer)** device and the quality
    Spotify reports. See [Linux Soloist setup](docs/_reference/settings-and-files.md#linux-soloist-receiver-personal-fork)
    for updates and limitations, including the equalizer bypass.
 

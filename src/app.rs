@@ -20730,6 +20730,88 @@ mod tests {
         app.backend.shutdown();
     }
 
+    /// Every text the guide shows, from its accessibility tree.
+    #[cfg(all(target_os = "linux", feature = "demo"))]
+    fn guide_texts(ctx: &egui::Context, app: &mut App) -> Vec<String> {
+        let mut tree = None;
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 1800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            );
+            output.textures_delta.clear();
+            tree = output.platform_output.accesskit_update;
+        }
+        tree.unwrap()
+            .nodes
+            .iter()
+            .flat_map(|(_, node)| [node.label(), node.value()])
+            .flatten()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Pairing is done from Spotify on the phone. When the phone does not
+    /// list the receiver, the guide names this receiver's port in the
+    /// firewall commands, and once paired reminds a listener who looked at
+    /// them to close it again.
+    #[cfg(all(target_os = "linux", feature = "demo"))]
+    #[test]
+    fn the_guide_pairs_from_the_phone_and_names_the_port_to_open() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = test_app("lossless-phone-help");
+        app.attach(&ctx);
+        // Signed in, so the window draws the library behind the guide.
+        crate::demo::populate(&mut app);
+        soloist_ready(&mut app);
+        app.devices.clear();
+        app.settings.lossless = true;
+        app.lossless.pairing = Some(Instant::now());
+        app.backend.soloist().assume_pairing_port(60437);
+        app.dialog = Some(Dialog::LosslessSetup);
+        let shows = |texts: &[String], part: &str| texts.iter().any(|text| text.contains(part));
+
+        let waiting = guide_texts(&ctx, &mut app);
+        assert!(
+            shows(&waiting, "On your phone, open Spotify"),
+            "{waiting:?}"
+        );
+        assert!(
+            !shows(&waiting, "sudo ufw allow 60437/tcp"),
+            "the help stays folded while pairing may still finish"
+        );
+
+        app.lossless.pairing = None;
+        app.lossless.pairing_failed = true;
+        let failed = guide_texts(&ctx, &mut app);
+        assert!(shows(&failed, "sudo ufw allow 60437/tcp"), "{failed:?}");
+        assert!(shows(&failed, "sudo ufw delete allow 60437/tcp"));
+        assert!(shows(
+            &failed,
+            "sudo firewall-cmd --add-port=60437/tcp --timeout=10m"
+        ));
+        assert!(shows(&failed, "hotspot"));
+        assert!(shows(&failed, "Local Network"));
+
+        // Paired: the listener who saw the commands is told to close it.
+        app.lossless.pairing_failed = false;
+        app.backend.soloist().assume_device_id("soloist");
+        soloist_ready(&mut app);
+        let paired = guide_texts(&ctx, &mut app);
+        assert!(shows(&paired, "Connected."));
+        assert!(shows(&paired, "If you opened port 60437"));
+        assert!(shows(&paired, "sudo ufw delete allow 60437/tcp"));
+        assert!(!shows(&paired, "On your phone, open Spotify"));
+        app.backend.shutdown();
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn choosing_lossless_again_opens_the_guide_while_soloist_cannot_sign_in() {

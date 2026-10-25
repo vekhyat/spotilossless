@@ -715,13 +715,25 @@ time, a guide opens with three steps, each showing what is already done:
    [Spotify for Developers](https://developer.spotify.com/dashboard). Paste it
    and choose **Save key**. The field is hidden, empties as soon as the key is
    sent, and the key goes only to Secret Service.
-3. **Connect it to your account.** Choose **Start receiver**, open Spotify's
-   app on the same local network with the account used in Spotifast, and
-   select the receiver name shown in the guide from Spotify's device picker.
-   Spotify signs Soloist in; Spotifast waits for it to join that account.
+3. **Connect it to your account.** Choose **Start receiver**, then on your
+   phone open Spotify on the same Wi-Fi as this computer, with the account
+   used in Spotifast, tap the devices icon and choose the receiver name shown
+   in the guide. Nothing needs installing on the computer. Spotify signs
+   Soloist in; Spotifast waits for it to join that account.
    Soloist keeps the session in its data directory for later starts, so this
    pairing is needed only once. See
    [Spotify's pairing instructions](https://developer.spotify.com/documentation/soloist/concepts/authentication).
+
+The phone finds the receiver over mDNS and then connects to the TCP port
+Soloist listens on, which changes with each start. A firewall on the computer
+that drops that connection hides the receiver from the phone, so **Phone
+doesn't show it?** in the guide gives the `ufw` and `firewalld` commands for
+the current port, and once Soloist has joined, reminds a listener who saw
+them to close the port again. Spotifast reads the port from `/proc` for the
+receiver process it runs, and changes no firewall itself. The same section
+covers shared Wi-Fi, where others can see the receiver while its port is
+open and some networks keep devices apart (a phone's hotspot avoids both),
+and the Local Network permission Spotify needs on an iPhone.
 
 Spotifast's reusable playback credential cannot pair Soloist. A successful
 `addUser` reply does not mean Soloist has signed in, so the guide never sends

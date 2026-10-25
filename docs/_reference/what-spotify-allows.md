@@ -214,7 +214,7 @@ The Web API and librespot do not provide these features:
   Spotifast will reconsider it if Spotify offers a supported desktop path.
   This personal fork has an opt-in Linux **Lossless** choice whose guide
   downloads Soloist from Spotify on request and stores the listener's own key.
-  The listener pairs it once in Spotify's app on the same local network;
+  The listener pairs it once from Spotify on their phone, on the same Wi-Fi;
   Spotifast's playback credential cannot do that pairing. It controls Soloist as
   a Connect device and does not change librespot's playback capabilities. See
   [Linux Soloist setup](/settings-and-files/#linux-soloist-receiver-personal-fork)

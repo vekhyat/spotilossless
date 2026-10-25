@@ -56,7 +56,7 @@ struct Cli {
     /// `shuffle-selected`, `shuffle-started`, `undated-mix`, `signed-out`, `connecting`, `library-list`,
     /// `library-list-narrow`, `library-list-wide`, `library-grid`, `library-grid-narrow`,
     /// `library-grid-wide`, or on Linux `lossless-guide`, `lossless-connecting`,
-    /// `lossless-on` or `lossless-fallback`.
+    /// `lossless-phone-help`, `lossless-on` or `lossless-fallback`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_show: Option<String>,

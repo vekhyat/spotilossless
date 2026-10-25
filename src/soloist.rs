@@ -606,6 +606,9 @@ struct Snapshot {
     /// The volume the receiver last reported. Soloist starts at its own
     /// default, so a receiver started again starts here instead.
     volume: Option<u8>,
+    /// The TCP port the running receiver waits on for a Spotify app to pair
+    /// it. Each start picks another.
+    pairing_port: Option<u16>,
 }
 
 /// Cheap, thread-safe access for the app and a PipeWire tap. PID is cleared on
@@ -641,6 +644,21 @@ impl Handle {
         self.0.write().unwrap_or_else(|p| p.into_inner()).expired = expired;
     }
 
+    /// The port a phone pairs the running receiver through, once it is known.
+    pub fn pairing_port(&self) -> Option<u16> {
+        self.0
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .pairing_port
+    }
+
+    fn set_pairing_port(&self, port: u16) {
+        self.0
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .pairing_port = Some(port);
+    }
+
     pub fn device_id(&self) -> Option<String> {
         self.0
             .read()
@@ -663,6 +681,7 @@ impl Handle {
         let mut snapshot = self.0.write().unwrap_or_else(|p| p.into_inner());
         if pid.is_none() || snapshot.pid != pid {
             snapshot.signed_in = None;
+            snapshot.pairing_port = None;
         }
         snapshot.device_name = Some(config.device_name.clone());
         snapshot.pid = pid;
@@ -675,6 +694,13 @@ impl Handle {
     #[cfg(test)]
     pub(crate) fn assume_signed_in(&self, signed_in: Option<bool>) {
         self.0.write().unwrap_or_else(|p| p.into_inner()).signed_in = signed_in;
+    }
+
+    /// Demo captures, and the tests that draw them, stand in for the port a
+    /// receiver listens on.
+    #[cfg(feature = "demo")]
+    pub(crate) fn assume_pairing_port(&self, port: u16) {
+        self.set_pairing_port(port);
     }
 
     /// Tests stand in for a receiver that has started, or stopped.
@@ -866,6 +892,47 @@ fn existing(config: &Config) -> Option<Identity> {
     (matching && identity(pid) == Some(process)).then_some(process)
 }
 
+/// The TCP port Soloist waits on for a Spotify app to pair it: the listening
+/// socket it holds that is not on loopback, where its WebSocket is. A phone
+/// connects to it after finding the receiver over mDNS, so a firewall that
+/// drops those connections hides the receiver from phones.
+fn pairing_port(pid: u32) -> Option<u16> {
+    let sockets: std::collections::HashSet<u64> = std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .ok()?
+        .flatten()
+        .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+        .filter_map(|link| {
+            link.to_str()?
+                .strip_prefix("socket:[")?
+                .strip_suffix(']')?
+                .parse()
+                .ok()
+        })
+        .collect();
+    ["tcp", "tcp6"].iter().find_map(|table| {
+        let table = std::fs::read_to_string(format!("/proc/{pid}/net/{table}")).ok()?;
+        listening_port(&table, &sockets)
+    })
+}
+
+/// The port of a socket in `sockets` that listens beyond loopback, from a
+/// `/proc/net/tcp` or `tcp6` table.
+fn listening_port(table: &str, sockets: &std::collections::HashSet<u64>) -> Option<u16> {
+    const LISTEN: &str = "0A";
+    table.lines().skip(1).find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (address, port) = fields.get(1)?.split_once(':')?;
+        let inode: u64 = fields.get(9)?.parse().ok()?;
+        // Addresses are hex in host order: 127.0.0.1 is 0100007F, and an
+        // IPv4-mapped one ends the same way; ::1 is its own pattern.
+        let loopback = address.ends_with("7F") && (address.len() == 8 || address.contains("FFFF"))
+            || address == "00000000000000000000000001000000";
+        (*fields.get(3)? == LISTEN && !loopback && sockets.contains(&inode))
+            .then(|| u16::from_str_radix(port, 16).ok())
+            .flatten()
+    })
+}
+
 fn quiet_command(config: &Config) -> Command {
     let mut command = Command::new(&config.binary);
     command
@@ -1048,6 +1115,13 @@ fn supervise(
             // A first start writes its id a moment after launch.
             if state.device_id().is_none() && read_device_id(&config.data_dir).is_some() {
                 publish(process.map(|process: Identity| process.pid));
+            }
+            // Its pairing port opens a moment after launch, as its id does.
+            if state.pairing_port().is_none()
+                && let Some(port) = process.and_then(|process| pairing_port(process.pid))
+            {
+                state.set_pairing_port(port);
+                changed();
             }
             backoff.survived(began.elapsed());
         } else if Instant::now() >= next_try {
@@ -1585,6 +1659,46 @@ mod tests {
         assert_eq!(existing(&wrong), None, "another program is not Soloist");
         drop(child);
         assert_eq!(existing(&config), None);
+    }
+
+    #[test]
+    fn the_pairing_port_is_the_receivers_listener_beyond_loopback() {
+        // Soloist's WebSocket on 127.0.0.1:34365, its pairing listener on
+        // 0.0.0.0:60437, a connection, and another process's listener.
+        let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:865D 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 101 1 0 100 0 0 10 0
+   1: 00000000:EC15 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 102 1 0 100 0 0 10 0
+   2: 2F821FAC:EC15 B7801FAC:AF70 01 00000000:00000000 00:00000000 00000000  1000        0 103 1 0 20 4 30 10 -1
+   3: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 999 1 0 100 0 0 10 0
+";
+        let mine = std::collections::HashSet::from([101, 102, 103]);
+        assert_eq!(listening_port(table, &mine), Some(60437));
+        let loopback_only = std::collections::HashSet::from([101]);
+        assert_eq!(listening_port(table, &loopback_only), None);
+        let v6 = "  sl  local_address                         remote_address                        st
+   0: 00000000000000000000000001000000:1F91 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 201 1 0 100 0 0 10 0
+   1: 0000000000000000FFFF00000100007F:1F92 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 202 1 0 100 0 0 10 0
+   2: 00000000000000000000000000000000:1F93 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 203 1 0 100 0 0 10 0
+";
+        let all = std::collections::HashSet::from([201, 202, 203]);
+        assert_eq!(listening_port(v6, &all), Some(0x1F93));
+    }
+
+    #[test]
+    fn a_live_listener_is_read_from_proc() {
+        use std::os::fd::AsRawFd;
+        let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let link = std::fs::read_link(format!("/proc/self/fd/{}", listener.as_raw_fd())).unwrap();
+        let inode: u64 = link
+            .to_str()
+            .and_then(|link| link.strip_prefix("socket:["))
+            .and_then(|link| link.strip_suffix(']'))
+            .and_then(|inode| inode.parse().ok())
+            .unwrap();
+        let table = std::fs::read_to_string("/proc/self/net/tcp").unwrap();
+        let sockets = std::collections::HashSet::from([inode]);
+        assert_eq!(listening_port(&table, &sockets), Some(port));
     }
 
     #[test]

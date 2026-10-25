@@ -1228,6 +1228,15 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 app.demo_lossless(crate::app::lossless::DemoStage::Connecting);
                 app.dialog = Some(crate::model::Dialog::LosslessSetup);
             }
+            // A wait for pairing that ran out: what to do when the phone does
+            // not list the receiver.
+            #[cfg(target_os = "linux")]
+            "lossless-phone-help" => {
+                app.demo_lossless(crate::app::lossless::DemoStage::Connecting);
+                app.lossless.pairing = None;
+                app.lossless.pairing_failed = true;
+                app.dialog = Some(crate::model::Dialog::LosslessSetup);
+            }
             #[cfg(target_os = "linux")]
             "lossless-on" => app.demo_lossless(crate::app::lossless::DemoStage::On),
             #[cfg(target_os = "linux")]

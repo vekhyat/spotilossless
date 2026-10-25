@@ -688,6 +688,7 @@ impl App {
                 self.settings.lossless = true;
                 self.lossless.pairing = Some(Instant::now());
                 self.lossless.searched_at = Some(Instant::now());
+                self.backend.soloist().assume_pairing_port(60437);
             }
             DemoStage::On => {
                 self.settings.lossless = true;

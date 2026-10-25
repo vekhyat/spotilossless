@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Spotifast\n"
 "Report-Msgid-Bugs-To: https://github.com/crmne/spotifast/issues/new?"
 "template=translation.yml\n"
-"POT-Creation-Date: 2026-10-24 21:20+0530\n"
+"POT-Creation-Date: 2026-10-25 15:46+0530\n"
 "PO-Revision-Date: 2026-09-23 20:00+0000\n"
 "Last-Translator: Spotifast contributors\n"
 "Language-Team: Russian\n"
@@ -29,12 +29,12 @@ msgstr "Приостановить {name}"
 msgid "Play {name}"
 msgstr "Воспроизвести {name}"
 
-#: src/ui/sidebar.rs:302 src/app.rs:3399 src/app.rs:22948
+#: src/ui/sidebar.rs:302 src/app.rs:3399 src/app.rs:23615
 #: src/ui/collection.rs:2119 src/ui/collection.rs:2336
 msgid "Playlist"
 msgstr "Плейлист"
 
-#: src/ui/sidebar.rs:312 src/ui/friends.rs:286 src/app.rs:3373 src/app.rs:22953
+#: src/ui/sidebar.rs:312 src/ui/friends.rs:286 src/app.rs:3373 src/app.rs:23620
 #: src/ui/collection.rs:2329 src/ui/home.rs:93 src/ui/keys.rs:264
 #: src/ui/winamp/playlist.rs:653
 msgid "Liked Songs"
@@ -49,7 +49,7 @@ msgstr "Порядок медиатеки"
 msgid "Recently played"
 msgstr "Недавно прослушанные"
 
-#: src/ui/sidebar.rs:358 src/ui/dialogs.rs:607 src/ui/dialogs.rs:764
+#: src/ui/sidebar.rs:358 src/ui/dialogs.rs:758 src/ui/dialogs.rs:915
 msgid "Name"
 msgstr "Название"
 
@@ -80,7 +80,7 @@ msgstr "Плейлист • {owner}"
 msgid "Home"
 msgstr "Главная"
 
-#: src/ui/sidebar.rs:979 src/app.rs:8005 src/ui/keys.rs:251
+#: src/ui/sidebar.rs:979 src/app.rs:8007 src/ui/keys.rs:251
 msgid "Search"
 msgstr "Поиск"
 
@@ -112,7 +112,7 @@ msgstr "Поиск в медиатеке"
 msgid "Library"
 msgstr "Медиатека"
 
-#: src/ui/sidebar.rs:1095 src/app.rs:7979 src/model.rs:722 src/ui/search.rs:668
+#: src/ui/sidebar.rs:1095 src/app.rs:7981 src/model.rs:722 src/ui/search.rs:668
 msgid "Playlists"
 msgstr "Плейлисты"
 
@@ -234,7 +234,7 @@ msgstr "Нажмите, чтобы сменить визуализатор"
 msgid "Nothing playing"
 msgstr "Ничего не играет"
 
-#: src/ui/player_bar.rs:444 src/app.rs:9466
+#: src/ui/player_bar.rs:444 src/app.rs:9483
 msgid "Pick a song, album, or playlist"
 msgstr "Выбери трек, альбом или плейлист"
 
@@ -466,7 +466,7 @@ msgid "No timed lyrics for this track."
 msgstr "Для этого трека нет синхронизированного текста."
 
 #: src/ui/lyrics.rs:462 src/ui/widgets.rs:2823 src/ui/widgets.rs:2863
-#: src/ui/widgets.rs:2891 src/app.rs:13161 src/ui/collection.rs:892
+#: src/ui/widgets.rs:2891 src/app.rs:13197 src/ui/collection.rs:892
 msgid "Loading…"
 msgstr "Загрузка…"
 
@@ -508,7 +508,7 @@ msgstr "Удалить из этого плейлиста"
 msgid "Filter playlists"
 msgstr "Фильтр плейлистов"
 
-#: src/ui/widgets.rs:875 src/ui/dialogs.rs:600
+#: src/ui/widgets.rs:875 src/ui/dialogs.rs:751
 msgid "New playlist"
 msgstr "Новый плейлист"
 
@@ -591,7 +591,7 @@ msgstr "Удалить из медиатеки"
 msgid "Add to Your Library"
 msgstr "Добавить в медиатеку"
 
-#: src/ui/widgets.rs:1258 src/ui/dialogs.rs:699
+#: src/ui/widgets.rs:1258 src/ui/dialogs.rs:850
 msgid "Edit details"
 msgstr "Изменить сведения"
 
@@ -674,7 +674,7 @@ msgstr "ПРОСЛУШИВАНИЯ"
 msgid "Sort by duration"
 msgstr "Сортировать по длительности"
 
-#: src/ui/widgets.rs:2902 src/app.rs:13408 src/app.rs:13422
+#: src/ui/widgets.rs:2902 src/app.rs:13444 src/app.rs:13458
 msgid "Network connection error. Check your connection."
 msgstr "Ошибка сетевого подключения. Проверьте соединение."
 
@@ -682,7 +682,7 @@ msgstr "Ошибка сетевого подключения. Проверьте
 msgid "Cut"
 msgstr "Вырезать"
 
-#: src/ui/widgets.rs:3165
+#: src/ui/widgets.rs:3165 src/ui/dialogs.rs:619
 msgid "Copy"
 msgstr "Копировать"
 
@@ -745,7 +745,7 @@ msgid "Couldn't change how Spotifast starts with your computer."
 msgstr "Не удалось изменить запуск Spotifast вместе с компьютером."
 
 #. Translators: {name} is the name of a speaker or other playback device.
-#: src/app.rs:2551 src/app/lossless.rs:141
+#: src/app.rs:2551 src/app/lossless.rs:298
 #, rust-format
 msgid "{name} is ready"
 msgstr "Устройство {name} готово"
@@ -852,7 +852,7 @@ msgid "Queue cleared"
 msgstr "Очередь очищена"
 
 #. Translators: Keep {date} unchanged. It is a date in YYYY-MM-DD form.
-#: src/app.rs:6141 src/app.rs:22938
+#: src/app.rs:6141 src/app.rs:23605
 #, rust-format
 msgid "Queue {date}"
 msgstr "Очередь {date}"
@@ -868,179 +868,179 @@ msgid "Couldn't load your profile: {error}"
 msgstr "Не удалось загрузить профиль: {error}"
 
 #. Translators: {error} is an error message.
-#: src/app.rs:6761
+#: src/app.rs:6763
 #, rust-format
 msgid "Couldn't list devices: {error}"
 msgstr "Не удалось получить список устройств: {error}"
 
 #. Translators: {error} is an error message.
-#: src/app.rs:7223
+#: src/app.rs:7225
 #, rust-format
 msgid "Couldn't load more playlists: {error}"
 msgstr "Не удалось загрузить ещё плейлисты: {error}"
 
-#: src/app.rs:7269
+#: src/app.rs:7271
 msgid ""
 "Spotify hasn't confirmed your playlist changes yet. Try refreshing again."
 msgstr ""
 "Spotify ещё не подтвердил изменения в плейлистах. Попробуй обновить ещё раз."
 
 #. Translators: {name} is a playlist name.
-#: src/app.rs:7473
+#: src/app.rs:7475
 #, rust-format
 msgid "Created {name}"
 msgstr "Плейлист «{name}» создан"
 
 #. Translators: {error} is an error message.
-#: src/app.rs:7499
+#: src/app.rs:7501
 #, rust-format
 msgid "Couldn't create the playlist: {error}"
 msgstr "Не удалось создать плейлист: {error}"
 
-#: src/app.rs:7553
+#: src/app.rs:7555
 msgid "Playlist cover updated"
 msgstr "Обложка плейлиста обновлена"
 
-#: src/app.rs:7562
+#: src/app.rs:7564
 msgid "Playlist updated"
 msgstr "Плейлист обновлён"
 
 #. Translators: {error} is an error message.
-#: src/app.rs:7572 src/app.rs:7689
+#: src/app.rs:7574 src/app.rs:7691
 #, rust-format
 msgid "Couldn't update the playlist: {error}"
 msgstr "Не удалось обновить плейлист: {error}"
 
 #. Translators: {error} is an error message.
-#: src/app.rs:7646
+#: src/app.rs:7648
 #, rust-format
 msgid "Playlist change failed: {error}"
 msgstr "Не удалось изменить плейлист: {error}"
 
-#: src/app.rs:7673
+#: src/app.rs:7675
 msgid "Added to Your Library"
 msgstr "Добавлено в медиатеку"
 
-#: src/app.rs:7675 src/app.rs:7883
+#: src/app.rs:7677 src/app.rs:7885
 msgid "Removed from Your Library"
 msgstr "Удалено из медиатеки"
 
-#: src/app.rs:7876
+#: src/app.rs:7878
 msgid "Added to Liked Songs"
 msgstr "Добавлено в Любимые треки"
 
-#: src/app.rs:7878
+#: src/app.rs:7880
 msgid "Removed from Liked Songs"
 msgstr "Удалено из Любимых треков"
 
-#: src/app.rs:7880
+#: src/app.rs:7882
 msgid "Following artist"
 msgstr "Подписка на исполнителя оформлена"
 
-#: src/app.rs:7881
+#: src/app.rs:7883
 msgid "Unfollowed artist"
 msgstr "Подписка на исполнителя отменена"
 
-#: src/app.rs:7882
+#: src/app.rs:7884
 msgid "Saved to Your Library"
 msgstr "Сохранено в медиатеке"
 
 #. Translators: {error} is an error message.
-#: src/app.rs:7897
+#: src/app.rs:7899
 #, rust-format
 msgid "Couldn't update your library: {error}"
 msgstr "Не удалось обновить медиатеку: {error}"
 
 #. Translators: {query} is the words someone searched for.
-#: src/app.rs:7949
+#: src/app.rs:7951
 #, rust-format
 msgid "Nothing on Spotify matches “{query}”"
 msgstr "В Spotify ничего не найдено по запросу «{query}»"
 
 #. Translators: {query} is the words someone searched for; {error} is an error message.
-#: src/app.rs:7957
+#: src/app.rs:7959
 #, rust-format
 msgid "Couldn't search for “{query}”: {error}"
 msgstr "Не удалось найти «{query}»: {error}"
 
 #. Translators: {error} is an error message.
-#: src/app.rs:8207
+#: src/app.rs:8209
 #, rust-format
 msgid "Cannot open this song: {error}"
 msgstr "Не удаётся открыть этот трек: {error}"
 
-#: src/app.rs:8221
+#: src/app.rs:8223
 msgid "This episode's podcast is not on Spotify"
 msgstr "Подкаста этого выпуска нет в Spotify"
 
 #. Translators: {error} is an error message.
-#: src/app.rs:8226
+#: src/app.rs:8228
 #, rust-format
 msgid "Cannot open this episode: {error}"
 msgstr "Не удаётся открыть этот выпуск: {error}"
 
-#: src/app.rs:8264
+#: src/app.rs:8275
 msgid "Choose a device from the devices menu first."
 msgstr "Сначала выбери устройство в меню устройств."
 
 #. Translators: {error} is an error message.
-#: src/app.rs:8300
+#: src/app.rs:8311
 #, rust-format
 msgid "Couldn't switch device: {error}"
 msgstr "Не удалось переключить устройство: {error}"
 
 #. Translators: {error} is an error message.
-#: src/app.rs:8312 src/app.rs:8336
+#: src/app.rs:8323 src/app.rs:8347
 #, rust-format
 msgid "Couldn't add to queue: {error}"
 msgstr "Не удалось добавить в очередь: {error}"
 
-#: src/app.rs:8427
+#: src/app.rs:8438
 msgid "This song's album is not on Spotify"
 msgstr "Альбома этого трека нет в Spotify"
 
-#: src/app.rs:8444
+#: src/app.rs:8455
 msgid "Spotifast cannot open this kind of Spotify link"
 msgstr "Spotifast не умеет открывать такие ссылки Spotify"
 
-#: src/app.rs:8692
+#: src/app.rs:8703
 msgid "Nothing is playing. Pick something first"
 msgstr "Ничего не играет. Сначала выбери, что включить"
 
-#: src/app.rs:9087
+#: src/app.rs:9104
 msgid "Choose a device, or enable playback on this computer"
 msgstr "Выбери устройство или включи воспроизведение на этом компьютере"
 
-#: src/app.rs:9449 src/app.rs:9454
+#: src/app.rs:9466 src/app.rs:9471
 msgid "Pick something to play"
 msgstr "Выбери, что включить"
 
 #. Translators: {name} is an album name.
-#: src/app.rs:9814
+#: src/app.rs:9850
 #, rust-format
 msgid "Loading {name} to queue…"
 msgstr "Добавление «{name}» в очередь…"
 
-#: src/app.rs:9833
+#: src/app.rs:9869
 msgid "Playback device changed. Add the album to queue again"
 msgstr "Устройство воспроизведения сменилось. Добавь альбом в очередь ещё раз"
 
-#: src/app.rs:9842 src/app.rs:9860 src/app.rs:9869
+#: src/app.rs:9878 src/app.rs:9896 src/app.rs:9905
 msgid "Couldn't load the album's songs in order. Try again"
 msgstr "Не удалось загрузить треки альбома по порядку. Попробуй ещё раз"
 
 #. Translators: {name} is an album name and {error} is an error message.
-#: src/app.rs:9849
+#: src/app.rs:9885
 #, rust-format
 msgid "Couldn't add {name} to queue: {error}"
 msgstr "Не удалось добавить «{name}» в очередь: {error}"
 
-#: src/app.rs:9907
+#: src/app.rs:9943
 msgid "This album has no playable songs to queue"
 msgstr "В этом альбоме нет треков, которые можно добавить в очередь"
 
 #. Translators: {count} is a number of songs and {name} is an album name.
-#: src/app.rs:9916
+#: src/app.rs:9952
 #, rust-format
 msgid "{count} song from {name} added to queue"
 msgid_plural "{count} songs from {name} added to queue"
@@ -1049,7 +1049,7 @@ msgstr[1] "{count} трека из «{name}» добавлены в очеред
 msgstr[2] "{count} треков из «{name}» добавлено в очередь"
 
 #. Translators: {count} is a number of songs.
-#: src/app.rs:9964
+#: src/app.rs:10000
 #, rust-format
 msgid "{count} song added to queue"
 msgid_plural "{count} songs added to queue"
@@ -1058,17 +1058,17 @@ msgstr[1] "{count} трека добавлены в очередь"
 msgstr[2] "{count} треков добавлено в очередь"
 
 #. Translators: {name} is a song, episode, album, or playlist name.
-#: src/app.rs:10004
+#: src/app.rs:10040
 #, rust-format
 msgid "{name} added to queue"
 msgstr "Добавлено в очередь: {name}"
 
-#: src/app.rs:10554
+#: src/app.rs:10590
 msgid "The clipboard has no Spotify song links"
 msgstr "В буфере обмена нет ссылок на треки Spotify"
 
 #. Translators: {count} is the number of pasted links that failed.
-#: src/app.rs:10635
+#: src/app.rs:10671
 #, rust-format
 msgid "{count} pasted link could not be added"
 msgid_plural "{count} pasted links could not be added"
@@ -1076,18 +1076,18 @@ msgstr[0] "Не удалось добавить {count} вставленную �
 msgstr[1] "Не удалось добавить {count} вставленные ссылки"
 msgstr[2] "Не удалось добавить {count} вставленных ссылок"
 
-#: src/app.rs:11312
+#: src/app.rs:11348
 msgid "Spotify doesn't let apps remove a playlist description, so it was kept"
 msgstr ""
 "Spotify не позволяет приложениям удалять описание плейлиста, поэтому оно "
 "сохранено"
 
-#: src/app.rs:11391 src/app.rs:11404
+#: src/app.rs:11427 src/app.rs:11440
 msgid "Link copied"
 msgstr "Ссылка скопирована"
 
 #. Translators: {count} is a number of song links, always more than one.
-#: src/app.rs:11408
+#: src/app.rs:11444
 #, rust-format
 msgid "{count} link copied"
 msgid_plural "{count} links copied"
@@ -1095,7 +1095,7 @@ msgstr[0] "Скопирована {count} ссылка"
 msgstr[1] "Скопировано {count} ссылки"
 msgstr[2] "Скопировано {count} ссылок"
 
-#: src/app.rs:11696
+#: src/app.rs:11732
 msgid ""
 "Spotify doesn't let apps reorder your playlists, so this order is saved on "
 "this computer"
@@ -1103,77 +1103,77 @@ msgstr ""
 "Spotify не позволяет приложениям менять порядок плейлистов, поэтому этот "
 "порядок сохранён на этом компьютере"
 
-#: src/app.rs:11792
+#: src/app.rs:11828
 msgid "Restarting local playback"
 msgstr "Перезапуск локального воспроизведения"
 
-#: src/app.rs:11828
+#: src/app.rs:11864
 msgid "Local playback needs Spotify Premium"
 msgstr "Для локального воспроизведения нужен Spotify Premium"
 
-#: src/app.rs:11878
+#: src/app.rs:11914
 msgid "Play history cleared"
 msgstr "История прослушивания очищена"
 
 #. Translators: {size} is a size in megabytes, such as 12.5.
-#: src/app.rs:11889
+#: src/app.rs:11925
 #, rust-format
 msgid "Cleared {size} MB of artwork"
 msgstr "Удалено {size} МБ обложек"
 
 #. Translators: {error} is an error message.
-#: src/app.rs:11895
+#: src/app.rs:11931
 #, rust-format
 msgid "Couldn't clear artwork: {error}"
 msgstr "Не удалось удалить обложки: {error}"
 
-#: src/app.rs:12122
+#: src/app.rs:12158
 msgid "Downloading MilkDrop preset packs"
 msgstr "Загрузка наборов пресетов MilkDrop"
 
 #. Translators: {name} is the name of a visualizer preset pack.
-#: src/app.rs:12156
+#: src/app.rs:12192
 #, rust-format
 msgid "Downloading {name} presets"
 msgstr "Загрузка пресетов {name}"
 
-#: src/app.rs:13342
+#: src/app.rs:13378
 msgid "Couldn't start playback"
 msgstr "Не удалось начать воспроизведение"
 
-#: src/app.rs:13343
+#: src/app.rs:13379
 msgid "Couldn't pause"
 msgstr "Не удалось поставить на паузу"
 
-#: src/app.rs:13344
+#: src/app.rs:13380
 msgid "Couldn't skip"
 msgstr "Не удалось переключить трек"
 
-#: src/app.rs:13345
+#: src/app.rs:13381
 msgid "Couldn't go back"
 msgstr "Не удалось вернуться назад"
 
-#: src/app.rs:13346
+#: src/app.rs:13382
 msgid "Couldn't seek"
 msgstr "Не удалось перемотать"
 
-#: src/app.rs:13347
+#: src/app.rs:13383
 msgid "Couldn't change the volume"
 msgstr "Не удалось изменить громкость"
 
-#: src/app.rs:13348
+#: src/app.rs:13384
 msgid "Couldn't change shuffle"
 msgstr "Не удалось изменить режим перемешивания"
 
-#: src/app.rs:13349
+#: src/app.rs:13385
 msgid "Couldn't change repeat"
 msgstr "Не удалось изменить режим повтора"
 
-#: src/app.rs:13392 src/ui/mod.rs:398
+#: src/app.rs:13428 src/ui/mod.rs:398
 msgid "Spotify won't let this computer play this song right now."
 msgstr "Spotify сейчас не даёт этому компьютеру воспроизвести эту песню."
 
-#: src/app.rs:13399
+#: src/app.rs:13435
 msgid ""
 "No audio output device was found. Connect or enable one, then press play "
 "again."
@@ -1181,16 +1181,16 @@ msgstr ""
 "Устройство вывода звука не найдено. Подключи или включи его, затем снова "
 "нажми «Воспроизвести»."
 
-#: src/app.rs:13413
+#: src/app.rs:13449
 msgid ""
 "Spotify doesn't make this playlist's songs available to third-party apps."
 msgstr "Spotify не открывает треки этого плейлиста сторонним приложениям."
 
-#: src/app.rs:13534
+#: src/app.rs:13570
 msgid "Spotify sign-in expired. Sign in again, then retry the cover upload."
 msgstr "Срок входа в Spotify истёк. Войди снова и повтори загрузку обложки."
 
-#: src/app.rs:13539
+#: src/app.rs:13575
 msgid ""
 "Spotify refused this cover. Check that you own the playlist, then sign in "
 "again to grant image upload permission. If using a personal app, reconnect "
@@ -1200,20 +1200,20 @@ msgstr ""
 "войди снова, чтобы разрешить загрузку изображений. Если используешь личное "
 "приложение, переподключи его и в настройках."
 
-#: src/app.rs:13543
+#: src/app.rs:13579
 msgid "Spotify rejected the image size. Choose a smaller image."
 msgstr ""
 "Spotify отклонил изображение из-за размера. Выбери изображение поменьше."
 
 #. Translators: {error} is an error message.
-#: src/app.rs:13546
+#: src/app.rs:13582
 #, rust-format
 msgid "Couldn't upload the cover: {error}. Try again."
 msgstr "Не удалось загрузить обложку: {error}. Попробуй ещё раз."
 
 #. Translators: Keep {track} unchanged. It is the name of the song,
 #. playlist, album, or artist the radio is based on, not translated.
-#: src/app.rs:22958 src/app/radio.rs:38
+#: src/app.rs:23625 src/app/radio.rs:38
 #, rust-format
 msgid "{track} Radio"
 msgstr "Радио по треку «{track}»"
@@ -2191,7 +2191,7 @@ msgstr "Сборник"
 msgid "Appears On"
 msgstr "Встречается в"
 
-#: src/app/lossless.rs:334
+#: src/app/lossless.rs:715
 msgid ""
 "Spotify has stopped this Soloist build. Update it in Settings to keep "
 "playing lossless."
@@ -2200,7 +2200,7 @@ msgstr ""
 "дальше слушать без потерь."
 
 #. Translators: {count} is a number of days. Soloist is the name of Spotify's player.
-#: src/app/lossless.rs:341
+#: src/app/lossless.rs:722
 #, rust-format
 msgid "Spotify stops this Soloist build in {count} day. Update it in Settings."
 msgid_plural ""
@@ -2570,8 +2570,8 @@ msgstr "Удалить «{name}»? В течение 90 дней его можн
 msgid "“{name}” will no longer appear in Your Library."
 msgstr "«{name}» больше не будет отображаться в медиатеке."
 
-#: src/ui/dialogs.rs:104 src/ui/dialogs.rs:147 src/ui/dialogs.rs:666
-#: src/ui/dialogs.rs:847 src/ui/login.rs:91
+#: src/ui/dialogs.rs:104 src/ui/dialogs.rs:147 src/ui/dialogs.rs:817
+#: src/ui/dialogs.rs:998 src/ui/login.rs:91
 msgid "Cancel"
 msgstr "Отмена"
 
@@ -2645,11 +2645,11 @@ msgstr "Обновить"
 msgid "Download"
 msgstr "Загрузить"
 
-#: src/ui/dialogs.rs:341
+#: src/ui/dialogs.rs:347
 msgid "2. Add your Soloist key"
 msgstr "2. Добавить ключ Soloist"
 
-#: src/ui/dialogs.rs:346
+#: src/ui/dialogs.rs:352
 msgid ""
 "Spotify gives each Premium listener their own key. Sign in, open Spotify "
 "Soloist API Key, and copy it here. It stays in your keyring."
@@ -2658,31 +2658,31 @@ msgstr ""
 "«Spotify Soloist API Key» и скопируйте его сюда. Он хранится в вашей связке "
 "ключей."
 
-#: src/ui/dialogs.rs:354
+#: src/ui/dialogs.rs:360
 msgid "Open Spotify for Developers"
 msgstr "Открыть Spotify for Developers"
 
-#: src/ui/dialogs.rs:364
+#: src/ui/dialogs.rs:370
 msgid "Saved. Paste a new key to replace it."
 msgstr "Сохранён. Вставьте новый ключ, чтобы заменить его."
 
-#: src/ui/dialogs.rs:366
+#: src/ui/dialogs.rs:372
 msgid "Paste your key"
 msgstr "Вставьте ключ"
 
-#: src/ui/dialogs.rs:389 src/ui/prerelease.rs:154
+#: src/ui/dialogs.rs:395 src/ui/prerelease.rs:154
 msgid "Saving…"
 msgstr "Сохранение…"
 
-#: src/ui/dialogs.rs:391
+#: src/ui/dialogs.rs:397
 msgid "Save key"
 msgstr "Сохранить ключ"
 
-#: src/ui/dialogs.rs:405
+#: src/ui/dialogs.rs:413
 msgid "3. Connect it to your account"
 msgstr "3. Подключить к аккаунту"
 
-#: src/ui/dialogs.rs:411
+#: src/ui/dialogs.rs:431
 msgid ""
 "Connected. Music on this computer plays through Soloist. The player bar "
 "shows the quality Spotify reports."
@@ -2690,39 +2690,56 @@ msgstr ""
 "Подключено. Музыка на этом компьютере звучит через Soloist. Панель плеера "
 "показывает качество, о котором сообщает Spotify."
 
-#: src/ui/dialogs.rs:417
+#: src/ui/dialogs.rs:437
 msgid "Waiting for Spotify to pair this receiver…"
 msgstr "Ожидание подключения этого приёмника через Spotify…"
 
-#: src/ui/dialogs.rs:424
+#: src/ui/dialogs.rs:444
 msgid ""
-"Pairing hasn't finished. Check that Spotify uses the same account and local "
-"network, select the receiver in Spotify's device picker, then press Check "
-"again."
-msgstr "Подключение не завершено. Проверьте, что Spotify использует тот же аккаунт и локальную сеть, выберите приёмник в списке устройств Spotify и нажмите «Проверить снова»."
+"Pairing hasn't finished. If your phone doesn't list the receiver, see below, "
+"then press Check again."
+msgstr ""
+"Подключение ещё не завершено. Если телефон не показывает приёмник, "
+"посмотрите ниже, а затем нажмите «Проверить снова»."
 
-#: src/ui/dialogs.rs:432
+#: src/ui/dialogs.rs:452
 msgid ""
-"Start the receiver, then pair it once in Spotify's app. It remembers your "
-"account for later starts."
-msgstr "Запустите приёмник и один раз подключите его в приложении Spotify. Он запомнит ваш аккаунт для следующих запусков."
+"Start the receiver, then pair it once from Spotify on your phone. Nothing "
+"else needs installing, and it remembers your account for later starts."
+msgstr ""
+"Запустите приёмник и один раз подключите его из Spotify на телефоне. Больше "
+"ничего устанавливать не нужно, а при следующих запусках он запомнит вашу "
+"учётную запись."
 
-#: src/ui/dialogs.rs:448
+#: src/ui/dialogs.rs:465
+#, rust-format
+msgid "If you opened port {port} for pairing, close it again:"
+msgstr "Если вы открывали порт {port} для подключения, закройте его снова:"
+
+#: src/ui/dialogs.rs:478
 #, rust-format
 msgid ""
-"In Spotify's app, use the same account and local network as Spotifast. Open "
-"the device picker and select {name}."
-msgstr "В приложении Spotify используйте тот же аккаунт и локальную сеть, что и в Spotifast. Откройте список устройств и выберите {name}."
+"On your phone, open Spotify on the same Wi-Fi as this computer, with the "
+"account you use here. Tap the devices icon and choose {name}."
+msgstr ""
+"На телефоне откройте Spotify в той же сети Wi-Fi, что и этот компьютер, с "
+"учётной записью, которую вы используете здесь. Нажмите значок устройств и "
+"выберите {name}."
 
-#: src/ui/dialogs.rs:454
+#: src/ui/dialogs.rs:485
 msgid "Check again"
 msgstr "Проверить снова"
 
-#: src/ui/dialogs.rs:456
+#: src/ui/dialogs.rs:487
 msgid "Start receiver"
 msgstr "Запустить приёмник"
 
-#: src/ui/dialogs.rs:470
+#: src/ui/dialogs.rs:498
+#, rust-format
+msgid "Phone doesn't show {name}?"
+msgstr "Телефон не показывает {name}?"
+
+#: src/ui/dialogs.rs:518
 msgid ""
 "Soloist's sound skips Spotifast's equalizer. If Spotify reports less than "
 "lossless, set this device's audio quality to Lossless once in Spotify's "
@@ -2732,34 +2749,88 @@ msgstr ""
 "качество ниже, чем без потерь, один раз установите для этого устройства "
 "качество «Без потерь» в приложении Spotify на телефоне."
 
-#: src/ui/dialogs.rs:504
+#: src/ui/dialogs.rs:540
+msgid "A firewall on this computer"
+msgstr "Брандмауэр на этом компьютере"
+
+#: src/ui/dialogs.rs:547
+#, rust-format
+msgid ""
+"It can stop your phone reaching the receiver. Open the receiver's port, "
+"{port}, for this one step. With ufw:"
+msgstr ""
+"Он может не пускать телефон к приёмнику. Откройте порт приёмника, {port}, "
+"только на время этого шага. С ufw:"
+
+#: src/ui/dialogs.rs:555
+msgid "Close it again once the receiver is connected:"
+msgstr "Закройте его снова, когда приёмник подключится:"
+
+#: src/ui/dialogs.rs:561
+msgid "With firewalld, this opens it for 10 minutes only:"
+msgstr "С firewalld эта команда открывает его только на 10 минут:"
+
+#: src/ui/dialogs.rs:574
+msgid ""
+"It can stop your phone reaching the receiver. Start the receiver to see the "
+"port to open."
+msgstr ""
+"Он может не пускать телефон к приёмнику. Запустите приёмник, чтобы увидеть, "
+"какой порт открыть."
+
+#: src/ui/dialogs.rs:579
+msgid "Shared Wi-Fi"
+msgstr "Общий Wi-Fi"
+
+#: src/ui/dialogs.rs:584
+msgid ""
+"At a school, office or hotel, others on the Wi-Fi can also see the receiver "
+"while its port is open, and some networks keep devices apart. Your phone's "
+"hotspot avoids both: connect this computer to it for this step."
+msgstr ""
+"В школе, офисе или отеле другие люди в той же сети Wi-Fi тоже видят "
+"приёмник, пока его порт открыт, а некоторые сети изолируют устройства друг "
+"от друга. Точка доступа телефона решает обе проблемы: подключите к ней этот "
+"компьютер на время этого шага."
+
+#: src/ui/dialogs.rs:588
+msgid "iPhone"
+msgstr "iPhone"
+
+#: src/ui/dialogs.rs:593
+msgid "Allow Spotify under Settings > Privacy & Security > Local Network."
+msgstr ""
+"Разрешите Spotify в разделе «Настройки» > «Конфиденциальность и "
+"безопасность» > «Локальная сеть»."
+
+#: src/ui/dialogs.rs:655
 #, rust-format
 msgid "This song is already in “{playlist}”. Add it again?"
 msgstr "Этот трек уже есть в «{playlist}». Добавить ещё раз?"
 
-#: src/ui/dialogs.rs:511
+#: src/ui/dialogs.rs:662
 #, rust-format
 msgid "This song is already in “{playlist}”. Add them anyway?"
 msgstr "Этот трек уже есть в «{playlist}». Всё равно добавить их?"
 
 #. Translators: {name} is a song name and {playlist} a playlist name.
-#: src/ui/dialogs.rs:516
+#: src/ui/dialogs.rs:667
 #, rust-format
 msgid "“{name}” is already in “{playlist}”. Add it again?"
 msgstr "«{name}» уже есть в «{playlist}». Добавить ещё раз?"
 
-#: src/ui/dialogs.rs:524
+#: src/ui/dialogs.rs:675
 #, rust-format
 msgid "“{name}” is already in “{playlist}”. Add them anyway?"
 msgstr "«{name}» уже есть в «{playlist}». Всё равно добавить их?"
 
-#: src/ui/dialogs.rs:533
+#: src/ui/dialogs.rs:684
 #, rust-format
 msgid "“{first}” and “{second}” are already in “{playlist}”. Add them anyway?"
 msgstr "«{first}» и «{second}» уже есть в «{playlist}». Всё равно добавить их?"
 
 #. Translators: {first} and {second} are song names, {count} is how many more songs are already in the playlist, and {playlist} is a playlist name.
-#: src/ui/dialogs.rs:542
+#: src/ui/dialogs.rs:693
 #, rust-format
 msgid ""
 "“{first}”, “{second}”, and {count} more are already in “{playlist}”. Add "
@@ -2777,17 +2848,17 @@ msgstr[2] ""
 "«{first}», «{second}» и ещё {count} треков уже есть в «{playlist}». Всё "
 "равно добавить их?"
 
-#: src/ui/dialogs.rs:617
+#: src/ui/dialogs.rs:768
 msgid "My playlist"
 msgstr "Мой плейлист"
 
-#: src/ui/dialogs.rs:622 src/ui/dialogs.rs:625 src/ui/dialogs.rs:812
-#: src/ui/dialogs.rs:821
+#: src/ui/dialogs.rs:773 src/ui/dialogs.rs:776 src/ui/dialogs.rs:963
+#: src/ui/dialogs.rs:972
 msgid "Public playlist"
 msgstr "Открытый плейлист"
 
 #. Translators: {count} is the number of songs.
-#: src/ui/dialogs.rs:638
+#: src/ui/dialogs.rs:789
 #, rust-format
 msgid "{count} song will be added."
 msgid_plural "{count} songs will be added."
@@ -2795,47 +2866,47 @@ msgstr[0] "Будет добавлен {count} трек."
 msgstr[1] "Будут добавлены {count} трека."
 msgstr[2] "Будет добавлено {count} треков."
 
-#: src/ui/dialogs.rs:656
+#: src/ui/dialogs.rs:807
 msgid "Create"
 msgstr "Создать"
 
-#: src/ui/dialogs.rs:715
+#: src/ui/dialogs.rs:866
 msgid "Selected playlist cover"
 msgstr "Выбранная обложка плейлиста"
 
-#: src/ui/dialogs.rs:722
+#: src/ui/dialogs.rs:873
 msgid "Current playlist cover"
 msgstr "Текущая обложка плейлиста"
 
-#: src/ui/dialogs.rs:731
+#: src/ui/dialogs.rs:882
 msgid "Uploading cover…"
 msgstr "Загрузка обложки…"
 
-#: src/ui/dialogs.rs:733
+#: src/ui/dialogs.rs:884
 msgid "Choosing cover…"
 msgstr "Выбор обложки…"
 
-#: src/ui/dialogs.rs:739
+#: src/ui/dialogs.rs:890
 msgid "Change cover"
 msgstr "Изменить обложку"
 
-#: src/ui/dialogs.rs:748
+#: src/ui/dialogs.rs:899
 msgid "Upload cover"
 msgstr "Загрузить обложку"
 
-#: src/ui/dialogs.rs:774
+#: src/ui/dialogs.rs:925
 msgid "Playlist name"
 msgstr "Название плейлиста"
 
-#: src/ui/dialogs.rs:780
+#: src/ui/dialogs.rs:931
 msgid "Description"
 msgstr "Описание"
 
-#: src/ui/dialogs.rs:795
+#: src/ui/dialogs.rs:946
 msgid "Optional description"
 msgstr "Описание (необязательно)"
 
-#: src/ui/dialogs.rs:837
+#: src/ui/dialogs.rs:988
 msgid "Save"
 msgstr "Сохранить"
 
@@ -3801,6 +3872,29 @@ msgstr "Без потерь"
 #: src/quality.rs:54
 msgid "Lossless 24-bit"
 msgstr "Без потерь 24 бит"
+
+#~ msgid ""
+#~ "Pairing hasn't finished. Check that Spotify uses the same account and "
+#~ "local network, select the receiver in Spotify's device picker, then press "
+#~ "Check again."
+#~ msgstr ""
+#~ "Подключение не завершено. Проверьте, что Spotify использует тот же "
+#~ "аккаунт и локальную сеть, выберите приёмник в списке устройств Spotify и "
+#~ "нажмите «Проверить снова»."
+
+#~ msgid ""
+#~ "Start the receiver, then pair it once in Spotify's app. It remembers your "
+#~ "account for later starts."
+#~ msgstr ""
+#~ "Запустите приёмник и один раз подключите его в приложении Spotify. Он "
+#~ "запомнит ваш аккаунт для следующих запусков."
+
+#~ msgid ""
+#~ "In Spotify's app, use the same account and local network as Spotifast. "
+#~ "Open the device picker and select {name}."
+#~ msgstr ""
+#~ "В приложении Spotify используйте тот же аккаунт и локальную сеть, что и в "
+#~ "Spotifast. Откройте список устройств и выберите {name}."
 
 #~ msgid ""
 #~ "Soloist took your account but couldn't sign in. Check that step 2 holds "
