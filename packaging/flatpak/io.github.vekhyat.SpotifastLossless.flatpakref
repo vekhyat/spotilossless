@@ -1,0 +1,11 @@
+[Flatpak Ref]
+Name=io.github.vekhyat.SpotifastLossless
+Branch=stable
+Title=Spotifast Lossless
+Comment=An unofficial Spotifast fork that plays Spotify Lossless
+Url=https://vekhyat.github.io/spotilossless/repo/
+Homepage=https://github.com/vekhyat/spotilossless
+RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
+SuggestRemoteName=spotifast-lossless
+IsRuntime=false
+GPGKey=mDMEat3JwRYJKwYBBAHaRw8BAQdAycgD/zTfXqYrSL9b5JJLhCOgAI2YvFfK6KssorLb4WC0JVNwb3RpZmFzdCBMb3NzbGVzcyBGbGF0cGFrIHJlcG9zaXRvcnmIkAQTFgoAOBYhBBMl4WEV2o1MK34Z2K2izGDMm5kFBQJq3cnBAhsDBQsJCAcCBhUKCQgLAgQWAgMBAh4BAheAAAoJEK2izGDMm5kFc9AA+QETtzBNtcnh/rtRtICPoltyDC5wl25AEb1e1RGM02/TAP9tPFFSyq6OxSX9IHpFU/QB2kZTrHpOt6KVDtzxnW6RBA==

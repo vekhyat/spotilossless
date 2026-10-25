@@ -13,6 +13,8 @@ env:
 jobs:
   build:
     name: build (${{ matrix.target }})
+    # Upstream's release. This fork publishes through fork-release.yml.
+    if: github.repository == 'crmne/spotifast'
     runs-on: ${{ matrix.os }}
     env:
       CMAKE_GENERATOR: Ninja
@@ -198,6 +200,7 @@ jobs:
 
   macos:
     name: macOS universal app
+    if: github.repository == 'crmne/spotifast'
     runs-on: macos-latest
     env:
       # Complete Apple credentials enable native-packages signing/notarization.

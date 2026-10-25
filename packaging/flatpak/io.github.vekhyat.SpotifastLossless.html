@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spotifast Lossless</title>
+<style>
+  :root { color-scheme: light dark; --fg: #111; --bg: #fff; --muted: #555; --code: #f2f2f2; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #eee; --bg: #121212; --muted: #aaa; --code: #222; } }
+  body { margin: 0 auto; max-width: 42rem; padding: 2rem 16px; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+  code, pre { background: var(--code); border-radius: 6px; }
+  pre { padding: 0.75rem; overflow-x: auto; }
+  p.note { color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>Spotifast Lossless</h1>
+<p>An unofficial fork of <a href="https://github.com/crmne/spotifast">Spotifast</a> that plays Spotify Lossless through Spotify's Soloist receiver, on Linux. It is not made or supported by the Spotifast project.</p>
+<h2>Install</h2>
+<pre><code>flatpak install --user https://vekhyat.github.io/spotilossless/spotifast-lossless.flatpakref</code></pre>
+<p>Updates then come with <code>flatpak update</code> or your software centre.</p>
+<p>Then open Spotifast Lossless, sign in, and choose <strong>Settings &gt; Playback &gt; Audio quality &gt; Lossless</strong>. You need Spotify Premium and your own <a href="https://developer.spotify.com/dashboard">Soloist key</a>.</p>
+<p class="note">This address is a Flatpak repository: <a href="spotifast-lossless.flatpakrepo">spotifast-lossless.flatpakrepo</a>. Source, issues and releases are on <a href="https://github.com/vekhyat/spotilossless">GitHub</a>.</p>
+</body>
+</html>

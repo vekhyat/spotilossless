@@ -1,0 +1,42 @@
+# This fork's Flatpak: the binary the fork's release workflow built, in the
+# sandbox rocks.spotifast.Spotifast.yml describes, under an app ID of its
+# own so it never takes the place of upstream's Flathub app. The workflow
+# unpacks the build into built/ beside this file first.
+#
+# Soloist runs inside the sandbox, against this runtime's libraries, which
+# include the libatomic and glibc that some distributions lack.
+id: io.github.vekhyat.SpotifastLossless
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+command: spotifast
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  - --socket=pulseaudio
+  # Soloist's audio for the visualisers, through pw-dump and pw-record.
+  - --filesystem=xdg-run/pipewire-0
+  - --share=network
+  # Platform storage for this application's Spotify grants and Soloist key.
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --own-name=org.mpris.MediaPlayer2.spotifast
+  - --persist=.local/state
+modules:
+  - name: spotifast
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 spotifast /app/bin/spotifast
+      - install -Dm644 packaging/applications/spotifast.desktop /app/share/applications/io.github.vekhyat.SpotifastLossless.desktop
+      - sed -i 's/^Name=.*$/Name=Spotifast Lossless/;s/^Icon=.*$/Icon=io.github.vekhyat.SpotifastLossless/;s/^StartupWMClass=spotifast$/StartupWMClass=io.github.vekhyat.SpotifastLossless/' /app/share/applications/io.github.vekhyat.SpotifastLossless.desktop
+      - install -Dm644 packaging/icons/spotifast.svg /app/share/icons/hicolor/scalable/apps/io.github.vekhyat.SpotifastLossless.svg
+      - install -Dm644 packaging/flatpak/io.github.vekhyat.SpotifastLossless.metainfo.xml /app/share/metainfo/io.github.vekhyat.SpotifastLossless.metainfo.xml
+      - install -Dm644 LICENSE /app/share/licenses/io.github.vekhyat.SpotifastLossless/LICENSE
+    sources:
+      - type: dir
+        path: built
+      - type: file
+        path: io.github.vekhyat.SpotifastLossless.metainfo.xml
+        dest: packaging/flatpak

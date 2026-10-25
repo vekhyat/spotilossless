@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.vekhyat.SpotifastLossless</id>
+  <name>Spotifast Lossless</name>
+  <summary>An unofficial Spotifast fork that plays Spotify Lossless</summary>
+  <developer id="io.github.vekhyat">
+    <name>Vekhyat Jain</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      An unofficial fork of Spotifast, the native Spotify client by Carmine
+      Paolino. It adds lossless playback through Spotify's own Soloist
+      receiver, and is not made or supported by the Spotifast project.
+    </p>
+    <p>
+      Choose Lossless in Settings and a guide downloads Soloist from Spotify,
+      stores your own Soloist key in your keyring, and pairs the receiver once
+      in Spotify's app. Spotifast then plays through it and shows the quality
+      Spotify reports. Playback needs Spotify Premium.
+    </p>
+    <p>
+      Everything else is Spotifast: your library, search, playlists, the
+      queue, lyrics, Spotify Connect, media keys, the visualisers, and a mini
+      player for classic Winamp skins.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.vekhyat.SpotifastLossless.desktop</launchable>
+  <url type="homepage">https://github.com/vekhyat/spotilossless</url>
+  <url type="bugtracker">https://github.com/vekhyat/spotilossless/issues</url>
+  <url type="vcs-browser">https://github.com/vekhyat/spotilossless</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>A playlist, with the queue open and a track playing on a remote speaker</caption>
+      <image>https://raw.githubusercontent.com/vekhyat/spotilossless/main/docs/screenshot.png</image>
+    </screenshot>
+  </screenshots>
+  <branding>
+    <color type="primary" scheme_preference="light">#1ed760</color>
+    <color type="primary" scheme_preference="dark">#144a2a</color>
+  </branding>
+  <content_rating type="oars-1.1" />
+  <requires>
+    <display_length compare="ge">760</display_length>
+    <internet>always</internet>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <releases>
+    <release version="1.0.0" date="2026-10-25">
+      <url>https://github.com/vekhyat/spotilossless/releases/tag/v1.0.0</url>
+    </release>
+  </releases>
+</component>

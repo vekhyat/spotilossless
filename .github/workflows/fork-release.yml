@@ -1,0 +1,138 @@
+name: Fork release
+
+# This fork's releases: the Linux build as a Flatpak, published to a signed
+# Flatpak repository on this repository's GitHub Pages, so `flatpak update`
+# brings the next release, and attached to the GitHub release as a bundle.
+# Upstream's release.yml runs only in crmne/spotifast.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_ID: io.github.vekhyat.SpotifastLossless
+
+jobs:
+  build:
+    if: github.repository == 'vekhyat/spotilossless'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpipewire-0.3-dev libxkbcommon-dev \
+            libwayland-dev libgl1-mesa-dev cmake libclang-dev
+      # No compiler cache: published binaries never build from outputs
+      # restored from an Actions cache.
+      - run: cargo build --release --locked
+      - name: The tag is the version the binary reports
+        run: |
+          reported=$(target/release/spotifast --version)
+          test "$reported" = "spotifast ${GITHUB_REF_NAME#v}" || {
+            echo "Tag $GITHUB_REF_NAME, binary says: $reported" >&2
+            exit 1
+          }
+      - name: Files the Flatpak manifest installs
+        run: |
+          mkdir -p built
+          cp target/release/spotifast README.md LICENSE built/
+          cp --parents packaging/applications/spotifast.desktop packaging/icons/spotifast.svg built/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: built
+          path: built
+          if-no-files-found: error
+
+  flatpak:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: built
+          path: packaging/flatpak/built
+      - name: Signing key
+        env:
+          FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+        run: |
+          test -n "$FLATPAK_GPG_PRIVATE_KEY" || { echo "FLATPAK_GPG_PRIVATE_KEY is not set" >&2; exit 1; }
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          printf '%s\n' "$FLATPAK_GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          # Only the key whose public half the .flatpakref carries signs.
+          gpg --show-keys --with-colons packaging/flatpak/$APP_ID.gpg \
+            | awk -F: '/^fpr/ { print $10; exit }' > "$RUNNER_TEMP/fingerprint"
+          gpg --list-secret-keys "$(cat "$RUNNER_TEMP/fingerprint")" > /dev/null
+      - name: Build and sign the repository
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          key=$(cat "$RUNNER_TEMP/fingerprint")
+          chmod +x packaging/flatpak/built/spotifast
+          flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak-builder --disable-rofiles-fuse --force-clean --default-branch=stable \
+            --install-deps-from=flathub --repo=repo --gpg-sign="$key" \
+            build-dir packaging/flatpak/$APP_ID.yml
+          flatpak build-update-repo --generate-static-deltas --prune \
+            --title="Spotifast Lossless" --gpg-sign="$key" repo
+          flatpak build-bundle --gpg-sign="$key" \
+            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+            repo "spotifast-lossless-${GITHUB_REF_NAME}-x86_64.flatpak" "$APP_ID" stable
+      # Each release publishes the repository whole: an installed copy
+      # updates to its one commit, and needs none of the earlier ones.
+      - name: Pages site
+        run: |
+          mkdir site
+          cp -r repo site/repo
+          cp packaging/flatpak/$APP_ID.flatpakref site/spotifast-lossless.flatpakref
+          cp packaging/flatpak/$APP_ID.flatpakrepo site/spotifast-lossless.flatpakrepo
+          cp packaging/flatpak/$APP_ID.html site/index.html
+          touch site/.nojekyll
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundle
+          path: "*.flatpak"
+          if-no-files-found: error
+
+  publish:
+    needs: flatpak
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: deployment
+        uses: actions/deploy-pages@v5
+      - uses: actions/download-artifact@v7
+        with:
+          name: bundle
+          path: dist
+      - name: Checksums
+        run: cd dist && sha256sum *.flatpak > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          name: Spotifast Lossless ${{ github.ref_name }}
+          body_path: packaging/release-notes/${{ github.ref_name }}.md
+          generate_release_notes: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
