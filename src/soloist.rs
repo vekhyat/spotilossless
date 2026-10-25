@@ -1624,8 +1624,12 @@ mod tests {
         let mut config = scratch.config();
         config.binary = old.join("soloist");
         // Another test's fork can still hold the fresh copy open for writing.
+        // A shell that is BusyBox, as in Nix's build sandbox, picks what to
+        // be from argv[0], so the copy named soloist is started as sh.
         let spawn = || {
+            use std::os::unix::process::CommandExt;
             Command::new(&config.binary)
+                .arg0("sh")
                 .args(["-c", "read ignored", "--", "-D"])
                 .arg(&config.data_dir)
                 .stdin(Stdio::piped())
