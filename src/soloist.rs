@@ -829,7 +829,16 @@ fn existing(config: &Config) -> Option<Identity> {
         .ok()?;
     let process = identity(pid)?;
     let executable = std::fs::canonicalize(&config.binary).ok()?;
-    if std::fs::read_link(format!("/proc/{pid}/exe")).ok()? != executable {
+    let running = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    // An update points setup at a new build and removes the old one, but a
+    // receiver started outside Spotifast keeps running the build it started
+    // with until it exits. It is the same receiver on the same session, and
+    // a second one would contend for it; the new build starts after it.
+    let running = running
+        .to_str()
+        .and_then(|path| path.strip_suffix(" (deleted)"))
+        .map_or(running.clone(), PathBuf::from);
+    if running.file_name() != executable.file_name() {
         return None;
     }
     let args = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
@@ -1519,6 +1528,63 @@ mod tests {
                 assert_eq!(existing(&config), None);
             }
         }
+    }
+
+    #[test]
+    fn a_receiver_started_outside_is_reused_after_an_update_replaces_its_build() {
+        let scratch = Scratch::new();
+        let builds = Scratch::new();
+        let shell = std::fs::canonicalize("/bin/sh").unwrap();
+        let (old, new) = (builds.0.join("build-1"), builds.0.join("build-2"));
+        for folder in [&old, &new] {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::copy(&shell, folder.join("soloist")).unwrap();
+        }
+        let mut config = scratch.config();
+        config.binary = old.join("soloist");
+        // Another test's fork can still hold the fresh copy open for writing.
+        let spawn = || {
+            Command::new(&config.binary)
+                .args(["-c", "read ignored", "--", "-D"])
+                .arg(&config.data_dir)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let child = loop {
+            match spawn() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                result => break result.unwrap(),
+            }
+        };
+        let child = OwnedChild(child);
+        std::fs::write(
+            config.data_dir.join("soloist.pid"),
+            child.0.id().to_string(),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while existing(&config).is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(existing(&config).is_some());
+        // The update: setup names the new build and the old one is removed.
+        config.binary = new.join("soloist");
+        std::fs::remove_dir_all(&old).unwrap();
+        let found = existing(&config).expect("still the receiver on this session");
+        assert_eq!(found.pid, child.0.id());
+        let mut wrong = config.clone();
+        wrong.binary = "/bin/sleep".into();
+        assert_eq!(existing(&wrong), None, "another program is not Soloist");
+        drop(child);
+        assert_eq!(existing(&config), None);
     }
 
     #[test]
