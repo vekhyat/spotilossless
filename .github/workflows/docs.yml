@@ -50,6 +50,9 @@ jobs:
 
   deploy:
     needs: build
+    # The site is spotifast.rocks (docs/CNAME). A fork builds it as a check
+    # but has no Pages site of its own to publish to.
+    if: github.repository == 'crmne/spotifast'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
