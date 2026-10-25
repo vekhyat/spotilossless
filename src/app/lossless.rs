@@ -555,17 +555,24 @@ impl App {
         }
     }
 
-    /// Pause pressed while a stopped Soloist's place is being picked up,
-    /// before Soloist has anything to pause: the place waits for the next
-    /// press of play. `false` when no place is being picked up.
-    pub(super) fn pause_soloist_resume(&mut self) -> bool {
-        let place = match (&mut self.lossless.interrupted, &mut self.lossless.resuming) {
-            (Some(place), _) | (None, Some(place)) => place,
-            (None, None) => return false,
-        };
-        place.playing = false;
-        self.lossless.resume_at = None;
-        true
+    /// Play or pause pressed while a stopped Soloist's place is being picked
+    /// up, before Soloist has anything to pause. Paused, the place waits for
+    /// the next press of play; played while Spotify answers the resume, it
+    /// plays once Spotify does. `false` when the press is not for the place:
+    /// none is being picked up, or play starts a held one afresh.
+    pub(super) fn want_soloist_resume(&mut self, playing: bool) -> bool {
+        if let Some(place) = self.lossless.resuming.as_mut() {
+            place.playing = playing;
+            return true;
+        }
+        match self.lossless.interrupted.as_mut() {
+            Some(place) if !playing => {
+                place.playing = false;
+                self.lossless.resume_at = None;
+                true
+            }
+            _ => false,
+        }
     }
 
     pub(super) fn on_soloist_key_saved(&mut self, result: Result<(), String>) {

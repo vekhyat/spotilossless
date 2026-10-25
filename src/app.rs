@@ -9491,9 +9491,11 @@ impl App {
                 if self.settings.lossless && self.backend.soloist().is_device(device_id.as_deref())
                 {
                     // Pause while that place is being picked up: it waits
-                    // for the next press of play instead.
-                    if playing == Some(true) && self.pause_soloist_resume() {
-                        self.optimistic_playing = Some((false, Instant::now()));
+                    // for the next press of play instead. Play again while
+                    // Spotify answers plays it once Spotify does.
+                    let wanted = playing != Some(true);
+                    if self.want_soloist_resume(wanted) {
+                        self.optimistic_playing = Some((wanted, Instant::now()));
                         return;
                     }
                     if self.lossless.interrupted.is_some() {
@@ -21262,6 +21264,33 @@ mod tests {
                 )
             });
         assert!(paused, "the accepted play is paused behind it");
+
+        // Pause and then play again while Spotify answers: the latest press
+        // wins, and nothing pauses it behind the accepted play.
+        app.backend.soloist().assume_pid(Some(52));
+        app.follow_lossless(&ctx);
+        app.optimistic_playing = None;
+        soloist_playing(&mut app, false);
+        app.toggle_play();
+        assert!(resumed_at(&app).is_some());
+        soloist_playing(&mut app, true);
+        app.toggle_play();
+        soloist_playing(&mut app, false);
+        app.optimistic_playing = None;
+        app.toggle_play();
+        assert!(
+            app.backend.take_remote_play_requests().is_empty(),
+            "the resume on its way is the play"
+        );
+        assert_eq!(app.now_playing().map(|now| now.playing), Some(true));
+        app.handle_api(ApiResponse::Remote {
+            action: RemoteAction::Play,
+            result: Ok(()),
+        });
+        assert!(
+            app.backend.take_remote_play_requests().is_empty(),
+            "the latest play is not undone"
+        );
         app.backend.soloist().assume_signed_in(None);
         app.backend.shutdown();
     }
