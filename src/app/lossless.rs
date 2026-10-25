@@ -404,6 +404,16 @@ impl App {
             self.lossless.interrupted = None;
             return;
         }
+        if self.playing_elsewhere() {
+            // Music moved to another device: a later restart of Soloist
+            // has nothing of its own to pick up, and must not replace
+            // what plays there.
+            self.lossless.place = None;
+            self.lossless.interrupted = None;
+            self.lossless.resuming = None;
+            self.lossless.resume_at = None;
+            self.lossless.resume_tries = 0;
+        }
         let pid = self.backend.soloist().pid();
         if pid != self.lossless.pid {
             let previous = std::mem::replace(&mut self.lossless.pid, pid);
@@ -443,8 +453,28 @@ impl App {
                 .as_ref()
                 .is_some_and(|place| place.playing)
             && self.soloist_device_id().is_some()
+            && self.soloist_is_target()
         {
             self.resume_interrupted();
+        }
+    }
+
+    /// Whether what play and pause act on now is Soloist, by its id.
+    fn soloist_is_target(&self) -> bool {
+        match self.target() {
+            Target::Remote(id) => self.backend.soloist().is_device(id.as_deref()),
+            Target::Local => false,
+        }
+    }
+
+    /// Whether music is known to play on a device other than Soloist: one
+    /// Spotify or the listener names, or librespot playing here. A target
+    /// that only falls back while Soloist restarts does not count.
+    fn playing_elsewhere(&self) -> bool {
+        match self.target() {
+            Target::Remote(Some(id)) => !self.backend.soloist().is_device(Some(&id)),
+            Target::Remote(None) => false,
+            Target::Local => self.local.is_active(),
         }
     }
 
@@ -482,7 +512,10 @@ impl App {
         );
         self.play_request(request, false);
         // After the play: starting one clears what was held.
-        self.lossless.resuming = Some(place);
+        self.lossless.resuming = Some(Place {
+            playing: true,
+            ..place
+        });
         self.lossless.resume_tries = tries;
         true
     }
@@ -495,23 +528,44 @@ impl App {
         let Some(place) = self.lossless.resuming.take() else {
             return false;
         };
+        if !place.playing {
+            // Paused while Spotify answered: held for the next play.
+            self.clear_play_pending();
+            self.lossless.resume_tries = 0;
+            self.lossless.interrupted = Some(place);
+            return true;
+        }
         if self.lossless.resume_tries >= RESUME_TRIES {
             self.lossless.resume_tries = 0;
             return false;
         }
-        // Play was pressed, or it was playing: either way it plays now.
-        self.lossless.interrupted = Some(Place {
-            playing: true,
-            ..place
-        });
+        self.lossless.interrupted = Some(place);
         self.lossless.resume_at = Some(Instant::now() + RESUME_RETRY);
         true
     }
 
-    /// A resume Spotify accepted: nothing is left to try again.
+    /// A resume Spotify accepted: nothing is left to try again. One paused
+    /// while Spotify answered is paused now.
     pub(super) fn soloist_resumed(&mut self) {
-        self.lossless.resuming = None;
         self.lossless.resume_tries = 0;
+        if let Some(place) = self.lossless.resuming.take()
+            && !place.playing
+        {
+            self.remote(RemoteAction::Pause, self.backend.soloist().device_id());
+        }
+    }
+
+    /// Pause pressed while a stopped Soloist's place is being picked up,
+    /// before Soloist has anything to pause: the place waits for the next
+    /// press of play. `false` when no place is being picked up.
+    pub(super) fn pause_soloist_resume(&mut self) -> bool {
+        let place = match (&mut self.lossless.interrupted, &mut self.lossless.resuming) {
+            (Some(place), _) | (None, Some(place)) => place,
+            (None, None) => return false,
+        };
+        place.playing = false;
+        self.lossless.resume_at = None;
+        true
     }
 
     pub(super) fn on_soloist_key_saved(&mut self, result: Result<(), String>) {

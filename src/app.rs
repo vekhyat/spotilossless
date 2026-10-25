@@ -9488,12 +9488,18 @@ impl App {
                 // where the one that stopped was rather than restarting it.
                 // Known by its id: Spotify may not list the new one yet.
                 #[cfg(target_os = "linux")]
-                if self.settings.lossless
-                    && self.backend.soloist().is_device(device_id.as_deref())
-                    && self.lossless.interrupted.is_some()
+                if self.settings.lossless && self.backend.soloist().is_device(device_id.as_deref())
                 {
-                    self.resume_interrupted();
-                    return;
+                    // Pause while that place is being picked up: it waits
+                    // for the next press of play instead.
+                    if playing == Some(true) && self.pause_soloist_resume() {
+                        self.optimistic_playing = Some((false, Instant::now()));
+                        return;
+                    }
+                    if self.lossless.interrupted.is_some() {
+                        self.resume_interrupted();
+                        return;
+                    }
                 }
                 self.set_play_pending(vec!["::toggle".into()]);
                 if playing == Some(true) {
@@ -21146,6 +21152,116 @@ mod tests {
             app.handle_api(refused());
         }
         assert_eq!(app.toasts.len(), 1, "the refusal after the last try");
+        app.backend.soloist().assume_signed_in(None);
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_soloist_restart_after_music_moved_to_a_phone_leaves_the_phone_alone() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-moved-away");
+        app.local_ready = true;
+        app.local_device_id = Some("local".into());
+        soloist_ready(&mut app);
+        app.devices.push(Device {
+            id: Some("phone".into()),
+            name: "Phone".into(),
+            ..Default::default()
+        });
+        app.settings.lossless = true;
+        app.backend.soloist().assume_device_id("soloist");
+        app.backend.soloist().assume_pid(Some(40));
+        app.backend.soloist().assume_signed_in(Some(true));
+        soloist_playing(&mut app, true);
+        app.follow_lossless(&ctx);
+        app.follow_lossless(&ctx);
+        app.transfer("phone".into());
+        if let Some(remote) = app.remote.as_mut() {
+            remote.state.device = Some(Device {
+                id: Some("phone".into()),
+                is_active: true,
+                ..Default::default()
+            });
+        }
+        app.follow_lossless(&ctx);
+        // Soloist is replaced, by a crash or an update, and comes back.
+        app.backend.soloist().assume_pid(Some(41));
+        app.follow_lossless(&ctx);
+        app.follow_lossless(&ctx);
+        assert!(app.lossless.interrupted.is_none(), "nothing of Soloist's");
+        assert_eq!(resumed_at(&app), None, "the phone keeps its music");
+        app.backend.soloist().assume_signed_in(None);
+        app.backend.shutdown();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pause_while_a_restarted_soloist_is_picked_up_keeps_it_paused() {
+        let ctx = egui::Context::default();
+        let mut app = test_app("lossless-pause-resume");
+        app.local_ready = true;
+        app.local_device_id = Some("local".into());
+        soloist_ready(&mut app);
+        app.settings.lossless = true;
+        app.backend.soloist().assume_device_id("soloist");
+        app.backend.soloist().assume_pid(Some(50));
+        soloist_playing(&mut app, true);
+        app.follow_lossless(&ctx);
+        app.follow_lossless(&ctx);
+        app.backend.soloist().assume_pid(Some(51));
+        app.follow_lossless(&ctx);
+        // Pause before it has signed in: no play is sent, now or later.
+        app.toggle_play();
+        assert_eq!(resumed_at(&app), None, "pause sends no play");
+        assert_eq!(app.now_playing().map(|now| now.playing), Some(false));
+        app.backend.soloist().assume_signed_in(Some(true));
+        app.follow_lossless(&ctx);
+        assert_eq!(resumed_at(&app), None, "it stays paused once it is back");
+        // Play picks up the place; pause while Spotify refuses it the first
+        // time leaves it paused, and pause after it is accepted pauses it.
+        app.optimistic_playing = None;
+        soloist_playing(&mut app, false);
+        app.toggle_play();
+        assert!(resumed_at(&app).is_some_and(|(_, at)| at >= 40_000));
+        soloist_playing(&mut app, true);
+        app.toggle_play();
+        app.handle_api(ApiResponse::Remote {
+            action: RemoteAction::Play,
+            result: Err(crate::api::ApiError::Status {
+                status: 404,
+                message: "Requested entity was not found".into(),
+            }),
+        });
+        assert!(app.toasts.is_empty());
+        app.lossless.resume_at = Some(Instant::now());
+        app.follow_lossless(&ctx);
+        assert_eq!(resumed_at(&app), None, "no retry once paused");
+
+        app.optimistic_playing = None;
+        soloist_playing(&mut app, false);
+        app.toggle_play();
+        assert!(resumed_at(&app).is_some());
+        soloist_playing(&mut app, true);
+        app.toggle_play();
+        app.handle_api(ApiResponse::Remote {
+            action: RemoteAction::Play,
+            result: Ok(()),
+        });
+        let paused = app
+            .backend
+            .take_remote_play_requests()
+            .into_iter()
+            .any(|request| {
+                matches!(
+                    request,
+                    ApiRequest::Remote {
+                        action: RemoteAction::Pause,
+                        ..
+                    }
+                )
+            });
+        assert!(paused, "the accepted play is paused behind it");
         app.backend.soloist().assume_signed_in(None);
         app.backend.shutdown();
     }

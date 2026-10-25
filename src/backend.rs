@@ -1465,7 +1465,7 @@ impl Backend {
         if matches!(
             request,
             ApiRequest::Remote {
-                action: RemoteAction::Play,
+                action: RemoteAction::Play | RemoteAction::Pause,
                 ..
             } | ApiRequest::ShufflePlay { .. }
         ) {
